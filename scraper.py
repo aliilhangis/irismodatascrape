@@ -1,271 +1,286 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+İyileştirilmiş Ürün Scraper
+- Sitemap'ten direkt ürün linklerini alır
+- Her site için özelleştirilmiş selector'lar
+- Gelişmiş fiyat ve başlık çıkarma
+"""
+
 import requests
 from bs4 import BeautifulSoup
 import json
+from urllib.parse import urljoin, urlparse
 import time
-from datetime import datetime
-from urllib.parse import urljoin
 import re
+from xml.etree import ElementTree as ET
 
-class EcommerceScraper:
-    def __init__(self):
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+# Site konfigürasyonları - Her site için özel ayarlar
+SITE_CONFIGS = {
+    'technopluskibris.com': {
+        'name': 'TECHNOPLUSKIBRIS',
+        'sitemap_url': 'https://technopluskibris.com/sitemap.xml',
+        'product_url_pattern': r'/prd-',  # Ürün URL pattern'i
+        'selectors': {
+            'title': [
+                'h1.product-name',
+                'h1.product-title', 
+                '.product-detail h1',
+                'h1'
+            ],
+            'price': [
+                '.product-price .price',
+                '.price-tag',
+                'span[itemprop="price"]',
+                '.product-price',
+                'meta[property="product:price:amount"]'
+            ],
+            'currency': 'TL'
         }
-        self.results = []
-        
-    def get_page(self, url, retries=3):
-        """Sayfa içeriğini çek, hata durumunda tekrar dene"""
-        for i in range(retries):
-            try:
-                response = requests.get(url, headers=self.headers, timeout=10)
-                response.raise_for_status()
-                return response
-            except Exception as e:
-                print(f"Hata ({i+1}/{retries}): {url} - {str(e)}")
-                if i < retries - 1:
-                    time.sleep(2)
-        return None
-    
-    def extract_price_technopluskibris(self, soup):
-        """Technopluskibris fiyat parse"""
-        try:
-            # Ürün Fiyatı bölümünü bul
-            price_div = soup.find('div', string=re.compile('Ürün Fiyatı'))
-            if price_div:
-                # Bir sonraki kardeş elementi al (fiyatı içeren)
-                price_text = price_div.find_next_sibling()
-                if price_text:
-                    # Sadece sayıları ve noktayı al
-                    price = re.search(r'[\d.,]+', price_text.get_text())
-                    if price:
-                        return float(price.group().replace('.', '').replace(',', '.'))
-        except Exception as e:
-            print(f"Fiyat parse hatası: {e}")
-        return None
-    
-    def extract_price_durmazz(self, soup):
-        """Durmazz fiyat parse"""
-        try:
-            # Odoo e-ticaret yapısı için
-            price_elem = soup.find('span', class_='oe_currency_value')
-            if price_elem:
-                price_text = price_elem.get_text().strip()
-                price = re.search(r'[\d.,]+', price_text)
-                if price:
-                    return float(price.group().replace(',', ''))
-        except Exception as e:
-            print(f"Fiyat parse hatası: {e}")
-        return None
-    
-    def scrape_product_technopluskibris(self, url):
-        """Technopluskibris ürün bilgilerini çek"""
-        print(f"Scraping: {url}")
-        response = self.get_page(url)
-        if not response:
-            return None
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Ürün adı
-        title = soup.find('h1')
-        product_name = title.get_text().strip() if title else "Bilinmiyor"
-        
-        # Fiyat
-        price = self.extract_price_technopluskibris(soup)
-        
-        # Stok durumu
-        stock_elem = soup.find('div', string=re.compile('Stok Miktarı'))
-        in_stock = False
-        if stock_elem:
-            stock_text = stock_elem.find_next_sibling()
-            if stock_text and 'Stokta Var' in stock_text.get_text():
-                in_stock = True
-        
-        return {
-            'site': 'technopluskibris',
-            'url': url,
-            'name': product_name,
-            'price': price,
-            'currency': 'TL',
-            'in_stock': in_stock,
-            'scraped_at': datetime.now().isoformat()
+    },
+    'durmazz.com': {
+        'name': 'DURMAZZ',
+        'sitemap_url': 'https://www.durmazz.com/sitemap.xml',
+        'product_url_pattern': r'/shop/product/',  # Ürün URL pattern'i
+        'exclude_patterns': [r'/cart', r'/wishlist', r'/category', r'/checkout'],
+        'selectors': {
+            'title': [
+                'h1.product-name',
+                '.product-title h1',
+                'h1[itemprop="name"]',
+                '.product-detail h1',
+                'h1'
+            ],
+            'price': [
+                '.product-price',
+                'span[itemprop="price"]',
+                '.price-tag',
+                'meta[property="product:price:amount"]',
+                '.price'
+            ],
+            'currency': 'USD'
         }
+    }
+}
+
+def get_sitemap_urls(sitemap_url):
+    """Sitemap'ten tüm URL'leri çeker"""
+    try:
+        print(f"Sitemap alınıyor: {sitemap_url}")
+        response = requests.get(sitemap_url, timeout=10)
+        response.raise_for_status()
+        
+        urls = []
+        
+        # XML parse et
+        root = ET.fromstring(response.content)
+        
+        # XML namespace'i bul
+        namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+        
+        # <loc> taglerini bul
+        for loc in root.findall('.//ns:loc', namespace):
+            url = loc.text.strip()
+            urls.append(url)
+        
+        # Eğer namespace ile bulamazsa, namespace olmadan dene
+        if not urls:
+            for loc in root.findall('.//loc'):
+                url = loc.text.strip()
+                urls.append(url)
+        
+        print(f"✓ Sitemap'ten {len(urls)} URL bulundu")
+        return urls
+        
+    except Exception as e:
+        print(f"✗ Sitemap hatası: {e}")
+        return []
+
+def filter_product_urls(urls, config):
+    """URL'leri filtrele - sadece ürün sayfalarını al"""
+    product_urls = []
     
-    def scrape_product_durmazz(self, url):
-        """Durmazz ürün bilgilerini çek"""
-        print(f"Scraping: {url}")
-        response = self.get_page(url)
-        if not response:
-            return None
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Ürün adı
-        title = soup.find('h1', itemprop='name')
-        product_name = title.get_text().strip() if title else "Bilinmiyor"
-        
-        # Fiyat
-        price = self.extract_price_durmazz(soup)
-        
-        # Stok durumu
-        in_stock = soup.find('button', string=re.compile('Add to Cart')) is not None
-        
-        return {
-            'site': 'durmazz',
-            'url': url,
-            'name': product_name,
-            'price': price,
-            'currency': 'USD',
-            'in_stock': in_stock,
-            'scraped_at': datetime.now().isoformat()
-        }
+    product_pattern = config.get('product_url_pattern', '')
+    exclude_patterns = config.get('exclude_patterns', [])
     
-    def get_category_products_technopluskibris(self, category_url, max_products=10):
-        """Technopluskibris kategori sayfasından ürün linklerini topla"""
-        print(f"\nKategori taranıyor: {category_url}")
-        response = self.get_page(category_url)
-        if not response:
-            return []
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        product_links = []
-        
-        # Ürün linklerini bul (prd- ile başlayan linkler)
-        links = soup.find_all('a', href=re.compile(r'/prd-'))
-        
-        for link in links[:max_products]:
-            href = link.get('href')
-            if href:
-                full_url = urljoin('https://technopluskibris.com', href)
-                if full_url not in product_links:
-                    product_links.append(full_url)
-        
-        return product_links
-    
-    def get_category_products_durmazz(self, category_url, max_products=10):
-        """Durmazz kategori sayfasından ürün linklerini topla"""
-        print(f"\nKategori taranıyor: {category_url}")
-        response = self.get_page(category_url)
-        if not response:
-            return []
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        product_links = []
-        
-        # Ürün linklerini bul
-        links = soup.find_all('a', href=re.compile(r'/shop/'))
-        
-        for link in links[:max_products]:
-            href = link.get('href')
-            if href and '/shop/' in href and '/category/' not in href:
-                full_url = urljoin('https://www.durmazz.com', href)
-                if full_url not in product_links:
-                    product_links.append(full_url)
-        
-        return product_links
-    
-    def run(self, sites_config):
-        """Ana scraping fonksiyonu"""
-        print("="*60)
-        print("E-TİCARET SCRAPER BAŞLATILIYOR")
-        print("="*60)
-        
-        for site_config in sites_config:
-            site_name = site_config['name']
-            categories = site_config['categories']
-            max_per_category = site_config.get('max_products', 5)
+    for url in urls:
+        # Ürün pattern'ini kontrol et
+        if product_pattern and re.search(product_pattern, url):
+            # Hariç tutulacak pattern'leri kontrol et
+            is_excluded = False
+            for exclude_pattern in exclude_patterns:
+                if re.search(exclude_pattern, url):
+                    is_excluded = True
+                    break
             
-            print(f"\n{'='*60}")
-            print(f"SİTE: {site_name.upper()}")
-            print(f"{'='*60}")
-            
-            for category in categories:
-                # Kategori linklerini al
-                if site_name == 'technopluskibris':
-                    product_urls = self.get_category_products_technopluskibris(
-                        category, max_per_category
-                    )
-                    scrape_func = self.scrape_product_technopluskibris
-                else:  # durmazz
-                    product_urls = self.get_category_products_durmazz(
-                        category, max_per_category
-                    )
-                    scrape_func = self.scrape_product_durmazz
-                
-                print(f"\n{len(product_urls)} ürün bulundu")
-                
-                # Her ürünü scrape et
-                for url in product_urls:
-                    product_data = scrape_func(url)
-                    if product_data:
-                        self.results.append(product_data)
-                        print(f"✓ {product_data['name'][:50]}... - {product_data['price']} {product_data['currency']}")
-                    
-                    # Rate limiting
-                    time.sleep(1)
-        
-        return self.results
+            if not is_excluded:
+                product_urls.append(url)
     
-    def save_results(self, filename='scraping_results.json'):
-        """Sonuçları JSON dosyasına kaydet"""
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(self.results, f, ensure_ascii=False, indent=2)
-        print(f"\n{'='*60}")
-        print(f"✓ {len(self.results)} ürün {filename} dosyasına kaydedildi")
-        print(f"{'='*60}")
+    return product_urls
+
+def extract_price(soup, selectors):
+    """Sayfadan fiyatı çıkar - birden fazla selector dene"""
+    for selector in selectors:
+        try:
+            # CSS selector
+            element = soup.select_one(selector)
+            if element:
+                # Meta tag ise content attribute'unu al
+                if element.name == 'meta':
+                    price_text = element.get('content', '')
+                else:
+                    price_text = element.get_text(strip=True)
+                
+                # Fiyat rakamlarını çıkar
+                price_match = re.search(r'[\d.,]+', price_text.replace(',', ''))
+                if price_match:
+                    try:
+                        price = float(price_match.group().replace(',', '.'))
+                        return price
+                    except:
+                        continue
+        except:
+            continue
     
-    def print_summary(self):
-        """Özet istatistikler"""
-        print(f"\n{'='*60}")
-        print("ÖZET İSTATİSTİKLER")
-        print(f"{'='*60}")
-        
-        total = len(self.results)
-        techno_count = sum(1 for r in self.results if r['site'] == 'technopluskibris')
-        durmazz_count = sum(1 for r in self.results if r['site'] == 'durmazz')
-        
-        print(f"Toplam Ürün: {total}")
-        print(f"Technopluskibris: {techno_count}")
-        print(f"Durmazz: {durmazz_count}")
-        
-        # Fiyat ortalaması
-        prices = [r['price'] for r in self.results if r['price']]
-        if prices:
-            avg_price = sum(prices) / len(prices)
-            print(f"\nOrtalama Fiyat: {avg_price:.2f}")
-            print(f"En Düşük: {min(prices):.2f}")
-            print(f"En Yüksek: {max(prices):.2f}")
+    return None
 
+def extract_title(soup, selectors):
+    """Sayfadan başlığı çıkar - birden fazla selector dene"""
+    for selector in selectors:
+        try:
+            element = soup.select_one(selector)
+            if element:
+                title = element.get_text(strip=True)
+                if title and len(title) > 3:  # Çok kısa başlıkları reddet
+                    return title
+        except:
+            continue
+    
+    return "Bilinmiyor"
 
-# KULLANIM ÖRNEĞİ
+def scrape_product(url, config):
+    """Tek bir ürün sayfasını scrape et"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Başlık ve fiyat çıkar
+        title = extract_title(soup, config['selectors']['title'])
+        price = extract_price(soup, config['selectors']['price'])
+        currency = config['selectors']['currency']
+        
+        product_data = {
+            'title': title,
+            'price': price,
+            'currency': currency,
+            'url': url
+        }
+        
+        # Konsola yazdır
+        price_display = f"{price} {currency}" if price is not None else "Fiyat bulunamadı"
+        print(f"  ✓ {title[:50]}... - {price_display}")
+        
+        return product_data
+        
+    except Exception as e:
+        print(f"  ✗ Hata ({url}): {e}")
+        return None
+
+def scrape_site(config):
+    """Bir siteyi tamamen scrape et"""
+    print(f"\n{'='*60}")
+    print(f"SİTE: {config['name']}")
+    print(f"{'='*60}")
+    
+    products = []
+    
+    # Sitemap'ten URL'leri al
+    all_urls = get_sitemap_urls(config['sitemap_url'])
+    
+    if not all_urls:
+        print("✗ Sitemap'ten URL alınamadı")
+        return products
+    
+    # Ürün URL'lerini filtrele
+    product_urls = filter_product_urls(all_urls, config)
+    
+    print(f"\n✓ {len(product_urls)} ürün URL'si bulundu")
+    print(f"İlk birkaç ürün URL'si:")
+    for url in product_urls[:3]:
+        print(f"  - {url}")
+    
+    # Her ürünü scrape et
+    print(f"\nÜrünler scrape ediliyor...")
+    for i, url in enumerate(product_urls, 1):
+        print(f"\n[{i}/{len(product_urls)}] Scraping: {url}")
+        
+        product = scrape_product(url, config)
+        
+        if product:
+            products.append(product)
+        
+        # Rate limiting - siteyе çok yük bindirmemek için
+        time.sleep(0.5)
+    
+    print(f"\n✓ Toplam {len(products)} ürün başarıyla scrape edildi")
+    
+    return products
+
+def main():
+    """Ana fonksiyon"""
+    all_products = []
+    stats = {}
+    
+    # Her siteyi scrape et
+    for domain, config in SITE_CONFIGS.items():
+        products = scrape_site(config)
+        
+        # İstatistikleri kaydet
+        site_name = config['name'].lower().replace(' ', '_')
+        stats[site_name] = len(products)
+        
+        # Site bilgisini her ürüne ekle
+        for product in products:
+            product['site'] = config['name']
+        
+        all_products.extend(products)
+        
+        print(f"\n{config['name']}: {len(products)} ürün")
+    
+    # JSON'a kaydet
+    output_file = 'products.json'
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(all_products, f, ensure_ascii=False, indent=2)
+    
+    print(f"\n{'='*60}")
+    print(f"✓ {len(all_products)} ürün {output_file} dosyasına kaydedildi")
+    print(f"{'='*60}")
+    
+    # Özet istatistikler
+    print(f"\n{'='*60}")
+    print("ÖZET İSTATİSTİKLER")
+    print(f"{'='*60}")
+    print(f"Toplam Ürün: {len(all_products)}")
+    for site_name, count in stats.items():
+        print(f"{site_name.replace('_', ' ').title()}: {count}")
+    
+    # Fiyat istatistikleri
+    products_with_price = [p for p in all_products if p['price'] is not None]
+    products_without_price = [p for p in all_products if p['price'] is None]
+    
+    print(f"\nFiyatı olan ürünler: {len(products_with_price)}")
+    print(f"Fiyatı olmayan ürünler: {len(products_without_price)}")
+    
+    if products_without_price:
+        print(f"\nFiyatı bulunamayan ürünler:")
+        for p in products_without_price[:5]:  # İlk 5'ini göster
+            print(f"  - {p['title'][:60]} ({p['site']})")
+
 if __name__ == "__main__":
-    scraper = EcommerceScraper()
-    
-    # Hangi siteleri ve kategorileri tarayacağımızı belirle
-    sites_to_scrape = [
-        {
-            'name': 'technopluskibris',
-            'categories': [
-                'https://technopluskibris.com/ev-aletleri-ve-yasam/mutfak-gerecleri/kahve-makineleri',
-                'https://technopluskibris.com/telefon/telefonlar'
-            ],
-            'max_products': 5  # Her kategoriden kaç ürün
-        },
-        {
-            'name': 'durmazz',
-            'categories': [
-                'https://www.durmazz.com/shop/category/apple-iphone-accessories-iphone-s-2138',
-                'https://www.durmazz.com/shop/category/computer-technology-laptops-2245'
-            ],
-            'max_products': 5
-        }
-    ]
-    
-    # Scraping'i başlat
-    results = scraper.run(sites_to_scrape)
-    
-    # Sonuçları kaydet
-    scraper.save_results('products.json')
-    
-    # Özet göster
-    scraper.print_summary()
+    main()
