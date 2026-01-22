@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-İyileştirilmiş Ürün Scraper v2.0
+İyileştirilmiş Ürün Scraper v2.1
 - Sitemap index support
+- PostgreSQL entegrasyonu
 - Her site için özel pattern'ler  
-- Gelişmiş fiyat çıkarma
 """
 
 import requests
@@ -14,14 +14,28 @@ from urllib.parse import urljoin
 import time
 import re
 from xml.etree import ElementTree as ET
+import psycopg2
+from psycopg2.extras import Json
+import os
+from datetime import datetime
+import hashlib
+
+# PostgreSQL bağlantı ayarları (environment variables)
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'port': os.getenv('DB_PORT', '5432'),
+    'database': os.getenv('DB_NAME', 'postgres'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', ''),
+}
 
 # Site konfigürasyonları
 SITE_CONFIGS = {
     'technopluskibris.com': {
         'name': 'TECHNOPLUSKIBRIS',
         'sitemap_url': 'https://technopluskibris.com/sitemap.xml',
-        'sitemap_type': 'index',  # Sitemap index
-        'product_sitemap_pattern': r'products_\d+\.xml',  # Ürün sitemap pattern'i
+        'sitemap_type': 'index',
+        'product_sitemap_pattern': r'products_\d+\.xml',
         'product_url_pattern': r'/prd-',
         'selectors': {
             'title': [
@@ -68,6 +82,105 @@ SITE_CONFIGS = {
     }
 }
 
+def generate_sku(url, site_name):
+    """URL'den benzersiz SKU oluştur"""
+    # URL'nin son kısmını al
+    url_part = url.rstrip('/').split('/')[-1]
+    # Site prefix ekle
+    site_prefix = site_name[:3].upper()
+    # Hash oluştur (kısa tutmak için ilk 8 karakter)
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+    return f"{site_prefix}-{url_part[:30]}-{url_hash}"
+
+def get_db_connection():
+    """PostgreSQL bağlantısı oluştur"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        return conn
+    except Exception as e:
+        print(f"⚠️ Veritabanı bağlantı hatası: {e}")
+        return None
+
+def init_database():
+    """Veritabanı bağlantısını test et"""
+    conn = get_db_connection()
+    if conn:
+        print("✅ Veritabanı bağlantısı başarılı")
+        conn.close()
+        return True
+    else:
+        print("⚠️ Veritabanı bağlantısı kurulamadı - sadece JSON'a kaydedilecek")
+        return False
+
+def save_product_to_db(product, site_name):
+    """Ürünü veritabanına kaydet"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False
+        
+        cursor = conn.cursor()
+        
+        # SKU oluştur
+        sku = generate_sku(product['url'], site_name)
+        
+        # Stock status belirle
+        stock_status = 'in_stock' if product['price'] is not None else 'unknown'
+        
+        # Stock data oluştur
+        stock_data = {
+            'site': site_name,
+            'currency': product.get('currency'),
+            'last_seen_price': product.get('price'),
+            'scraped_at': datetime.now().isoformat()
+        }
+        
+        # Insert veya update
+        query = """
+        INSERT INTO products 
+            (sku, name, price, stock_status, url, product_name, product_url, 
+             stock_data, scraped_at, updated_at)
+        VALUES 
+            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (sku) 
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            price = EXCLUDED.price,
+            stock_status = EXCLUDED.stock_status,
+            product_name = EXCLUDED.product_name,
+            stock_data = EXCLUDED.stock_data,
+            scraped_at = EXCLUDED.scraped_at,
+            updated_at = EXCLUDED.updated_at
+        """
+        
+        now = datetime.now()
+        
+        cursor.execute(query, (
+            sku,
+            product['title'],
+            product['price'],
+            stock_status,
+            product['url'],
+            product['title'],
+            product['url'],
+            Json(stock_data),
+            now,
+            now
+        ))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return True
+        
+    except Exception as e:
+        print(f"      ⚠️ DB kayıt hatası: {str(e)[:50]}")
+        if conn:
+            conn.rollback()
+            conn.close()
+        return False
+
 def get_sitemap_urls(sitemap_url):
     """Sitemap'ten URL'leri çeker"""
     try:
@@ -77,12 +190,6 @@ def get_sitemap_urls(sitemap_url):
         
         urls = []
         root = ET.fromstring(response.content)
-        
-        # Namespace
-        namespaces = {
-            'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9',
-            '': 'http://www.sitemaps.org/schemas/sitemap/0.9'
-        }
         
         # <loc> taglerini bul
         for loc in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):
@@ -105,17 +212,14 @@ def get_product_sitemaps(config):
     sitemap_type = config.get('sitemap_type', 'direct')
     
     if sitemap_type == 'direct':
-        # Direkt ürün sitemap'i
         return [sitemap_url]
     
-    # Sitemap index - alt sitemap'leri bul
     print(f"📑 Sitemap index okunuyor...")
     all_sitemaps = get_sitemap_urls(sitemap_url)
     
     if not all_sitemaps:
         return []
     
-    # Ürün sitemap'lerini filtrele
     product_sitemap_pattern = config.get('product_sitemap_pattern', '')
     product_sitemaps = []
     
@@ -133,9 +237,7 @@ def filter_product_urls(urls, config):
     exclude_patterns = config.get('exclude_patterns', [])
     
     for url in urls:
-        # Ürün pattern kontrolü
         if product_pattern and re.search(product_pattern, url):
-            # Exclude kontrolü
             is_excluded = False
             for exclude_pattern in exclude_patterns:
                 if re.search(exclude_pattern, url):
@@ -153,20 +255,18 @@ def extract_price(soup, selectors):
         try:
             element = soup.select_one(selector)
             if element:
-                # Meta tag
                 if element.name == 'meta':
                     price_text = element.get('content', '')
                 else:
                     price_text = element.get_text(strip=True)
                 
-                # Fiyat parse
                 price_text = price_text.replace(',', '').replace(' ', '')
                 price_match = re.search(r'(\d+\.?\d*)', price_text)
                 
                 if price_match:
                     try:
                         price = float(price_match.group(1))
-                        if price > 0:  # Sıfır fiyatları reddet
+                        if price > 0:
                             return price
                     except:
                         continue
@@ -182,9 +282,7 @@ def extract_title(soup, selectors):
             element = soup.select_one(selector)
             if element:
                 title = element.get_text(strip=True)
-                # Title tag ise, meta bilgilerini temizle
                 if element.name == 'title':
-                    # " | Site Adı" gibi kısımları kaldır
                     title = re.split(r'\s*[|\-]\s*', title)[0]
                 
                 if title and len(title) > 3:
@@ -194,7 +292,7 @@ def extract_title(soup, selectors):
     
     return "Bilinmiyor"
 
-def scrape_product(url, config):
+def scrape_product(url, config, db_enabled=False):
     """Ürün scrape et"""
     try:
         headers = {
@@ -206,7 +304,6 @@ def scrape_product(url, config):
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Başlık ve fiyat
         title = extract_title(soup, config['selectors']['title'])
         price = extract_price(soup, config['selectors']['price'])
         currency = config['selectors']['currency']
@@ -218,11 +315,18 @@ def scrape_product(url, config):
             'url': url
         }
         
+        # Veritabanına kaydet
+        if db_enabled:
+            db_success = save_product_to_db(product_data, config['name'])
+            db_icon = "💾" if db_success else "⚠️"
+        else:
+            db_icon = "📝"
+        
         # Log
         if price is not None:
-            print(f"    ✓ {title[:50]}... - {price} {currency}")
+            print(f"    {db_icon} {title[:45]}... - {price} {currency}")
         else:
-            print(f"    ⚠ {title[:50]}... - Fiyat bulunamadı")
+            print(f"    {db_icon} {title[:45]}... - Fiyat yok")
         
         return product_data
         
@@ -230,7 +334,7 @@ def scrape_product(url, config):
         print(f"    ✗ Error: {str(e)[:50]}")
         return None
 
-def scrape_site(config):
+def scrape_site(config, db_enabled=False):
     """Site scrape et"""
     print(f"\n{'='*70}")
     print(f"🏪 SİTE: {config['name']}")
@@ -238,26 +342,22 @@ def scrape_site(config):
     
     products = []
     
-    # Ürün sitemap'lerini al
     product_sitemaps = get_product_sitemaps(config)
     
     if not product_sitemaps:
         print("✗ Ürün sitemap bulunamadı")
         return products
     
-    # Her sitemap'ten URL'leri al
     all_product_urls = []
     for sitemap_url in product_sitemaps:
         print(f"\n📄 Sitemap: {sitemap_url.split('/')[-1]}")
         urls = get_sitemap_urls(sitemap_url)
         
         if urls:
-            # Ürün URL'lerini filtrele
             product_urls = filter_product_urls(urls, config)
             all_product_urls.extend(product_urls)
             print(f"  ✓ {len(product_urls)} ürün URL'si bulundu")
     
-    # Duplicate'leri kaldır
     all_product_urls = list(set(all_product_urls))
     
     if not all_product_urls:
@@ -269,19 +369,17 @@ def scrape_site(config):
     for url in all_product_urls[:3]:
         print(f"  • {url}")
     
-    # Scrape et
     print(f"\n⚙️ Ürünler scrape ediliyor...")
     print(f"{'─'*70}")
     
     for i, url in enumerate(all_product_urls, 1):
         print(f"  [{i}/{len(all_product_urls)}]", end=" ")
         
-        product = scrape_product(url, config)
+        product = scrape_product(url, config, db_enabled)
         
         if product:
             products.append(product)
         
-        # Rate limiting
         if i % 10 == 0:
             time.sleep(1)
         else:
@@ -298,14 +396,20 @@ def main():
     print("🚀 ÜRÜN SCRAPER BAŞLATILIYOR")
     print(f"{'='*70}")
     
+    # Veritabanı kontrolü
+    db_enabled = init_database()
+    
+    if db_enabled:
+        print("💾 Veriler hem JSON hem PostgreSQL'e kaydedilecek")
+    else:
+        print("📝 Veriler sadece JSON'a kaydedilecek")
+    
     all_products = []
     stats = {}
     
-    # Her site
     for domain, config in SITE_CONFIGS.items():
-        products = scrape_site(config)
+        products = scrape_site(config, db_enabled)
         
-        # Stats
         site_name = config['name']
         stats[site_name] = {
             'total': len(products),
@@ -313,7 +417,6 @@ def main():
             'without_price': len([p for p in products if p['price'] is None])
         }
         
-        # Site bilgisi ekle
         for product in products:
             product['site'] = site_name
         
@@ -336,17 +439,10 @@ def main():
         print(f"  • Fiyatlı: {site_stats['with_price']}")
         print(f"  • Fiyatsız: {site_stats['without_price']}")
     
-    print(f"\n✅ Veriler '{output_file}' dosyasına kaydedildi")
+    print(f"\n✅ JSON: '{output_file}' dosyasına kaydedildi")
+    if db_enabled:
+        print(f"✅ PostgreSQL: Tüm ürünler veritabanına kaydedildi")
     print(f"{'='*70}\n")
-    
-    # Fiyatsız ürünler
-    products_without_price = [p for p in all_products if p['price'] is None]
-    if products_without_price:
-        print(f"\n⚠️ Fiyatı bulunamayan ürünler ({len(products_without_price)}):")
-        for p in products_without_price[:10]:
-            print(f"  • {p['title'][:60]} ({p['site']})")
-        if len(products_without_price) > 10:
-            print(f"  ... ve {len(products_without_price) - 10} ürün daha")
 
 if __name__ == "__main__":
     main()
