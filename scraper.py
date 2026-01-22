@@ -26,12 +26,14 @@ load_dotenv()
 
 # PostgreSQL bağlantı ayarları
 # ÖNCE .env'den oku, yoksa bu değerleri kullan
+# PostgreSQL bağlantı ayarları
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'zmmpuysxnwqngvlafolm.supabase.co'),
-    'port': int(os.getenv('DB_PORT', '5432')),
-    'database': os.getenv('DB_NAME', 'irisfiyattakip'),
-    'user': os.getenv('DB_USER', 'irisfiyattakip'),
+    'port': int(os.getenv('DB_PORT', '6543')),  # 5432 yerine 6543 (Pooler portu)
+    'database': os.getenv('DB_NAME', 'postgres'),  # 'irisfiyattakip' yerine 'postgres'
+    'user': os.getenv('DB_USER', 'postgres.zmmpuysxnwqngvlafolm'),  # Tam user adı
     'password': os.getenv('DB_PASSWORD', 'ezZEvKzs!2em*h5'),
+    'sslmode': 'require'  # SSL zorunlu
 }
 
 # TEST MODE - Sadece ilk N ürünü scrape et (0 = tümü)
