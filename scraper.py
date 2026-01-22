@@ -19,15 +19,22 @@ from psycopg2.extras import Json
 import os
 from datetime import datetime
 import hashlib
+from dotenv import load_dotenv
+
+# .env dosyasını yükle
+load_dotenv()
 
 # PostgreSQL bağlantı ayarları (environment variables)
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
-    'port': os.getenv('DB_PORT', '5432'),
+    'port': int(os.getenv('DB_PORT', '5432')),
     'database': os.getenv('DB_NAME', 'postgres'),
     'user': os.getenv('DB_USER', 'postgres'),
     'password': os.getenv('DB_PASSWORD', ''),
 }
+
+# TEST MODE - Sadece ilk N ürünü scrape et (0 = tümü)
+TEST_LIMIT = 10  # Test için 10 ürün, production'da 0 yapın
 
 # Site konfigürasyonları
 SITE_CONFIGS = {
@@ -95,18 +102,30 @@ def generate_sku(url, site_name):
 def get_db_connection():
     """PostgreSQL bağlantısı oluştur"""
     try:
+        print(f"  🔌 Bağlantı deneniyor: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
         conn = psycopg2.connect(**DB_CONFIG)
+        print(f"  ✅ Bağlantı başarılı!")
         return conn
     except Exception as e:
-        print(f"⚠️ Veritabanı bağlantı hatası: {e}")
+        print(f"  ❌ Veritabanı bağlantı hatası: {e}")
         return None
 
 def init_database():
     """Veritabanı bağlantısını test et"""
+    print("\n🔍 Veritabanı bağlantısı test ediliyor...")
     conn = get_db_connection()
     if conn:
-        print("✅ Veritabanı bağlantısı başarılı")
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM products;")
+            count = cursor.fetchone()[0]
+            print(f"✅ Veritabanında şu anda {count} ürün var")
+            cursor.close()
+        except Exception as e:
+            print(f"⚠️ Tablo sorgu hatası: {e}")
+            print("💡 'products' tablosunun oluşturulduğundan emin olun!")
+        finally:
+            conn.close()
         return True
     else:
         print("⚠️ Veritabanı bağlantısı kurulamadı - sadece JSON'a kaydedilecek")
@@ -114,6 +133,7 @@ def init_database():
 
 def save_product_to_db(product, site_name):
     """Ürünü veritabanına kaydet"""
+    conn = None
     try:
         conn = get_db_connection()
         if not conn:
@@ -175,7 +195,7 @@ def save_product_to_db(product, site_name):
         return True
         
     except Exception as e:
-        print(f"      ⚠️ DB kayıt hatası: {str(e)[:50]}")
+        print(f"      ❌ DB kayıt hatası: {str(e)}")
         if conn:
             conn.rollback()
             conn.close()
@@ -359,6 +379,11 @@ def scrape_site(config, db_enabled=False):
             print(f"  ✓ {len(product_urls)} ürün URL'si bulundu")
     
     all_product_urls = list(set(all_product_urls))
+    
+    # TEST LIMIT uygula
+    if TEST_LIMIT > 0:
+        print(f"\n⚠️ TEST MODU: Sadece ilk {TEST_LIMIT} ürün işlenecek")
+        all_product_urls = all_product_urls[:TEST_LIMIT]
     
     if not all_product_urls:
         print("\n✗ Hiç ürün URL'si bulunamadı")
