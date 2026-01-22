@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-İyileştirilmiş Ürün Scraper v2.1
+İyileştirilmiş Ürün Scraper v2.2
 - Sitemap index support
-- PostgreSQL entegrasyonu
+- PostgreSQL entegrasyonu (Supabase optimized)
 - Her site için özel pattern'ler  
 """
 
@@ -23,18 +23,6 @@ from dotenv import load_dotenv
 
 # .env dosyasını yükle
 load_dotenv()
-
-# PostgreSQL bağlantı ayarları
-# ÖNCE .env'den oku, yoksa bu değerleri kullan
-# PostgreSQL bağlantı ayarları
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'zmmpuysxnwqngvlafolm.supabase.co'),
-    'port': int(os.getenv('DB_PORT', '6543')),  # 5432 yerine 6543 (Pooler portu)
-    'database': os.getenv('DB_NAME', 'postgres'),  # 'irisfiyattakip' yerine 'postgres'
-    'user': os.getenv('DB_USER', 'postgres.zmmpuysxnwqngvlafolm'),  # Tam user adı
-    'password': os.getenv('DB_PASSWORD', 'ezZEvKzs!2em*h5'),
-    'sslmode': 'require'  # SSL zorunlu
-}
 
 # TEST MODE - Sadece ilk N ürünü scrape et (0 = tümü)
 TEST_LIMIT = 10  # Test için 10 ürün, production'da 0 yapın
@@ -103,14 +91,31 @@ def generate_sku(url, site_name):
     return f"{site_prefix}-{url_part[:30]}-{url_hash}"
 
 def get_db_connection():
-    """PostgreSQL bağlantısı oluştur"""
+    """PostgreSQL bağlantısı oluştur (Supabase optimized)"""
     try:
-        print(f"  🔌 Bağlantı deneniyor: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
-        conn = psycopg2.connect(**DB_CONFIG)
+        # Önce DATABASE_URL'yi dene (connection string)
+        database_url = os.getenv('DATABASE_URL')
+        
+        if database_url:
+            print(f"  🔌 Connection string ile bağlanılıyor...")
+            conn = psycopg2.connect(database_url)
+        else:
+            # Fallback: Ayrı parametrelerle bağlan
+            print(f"  🔌 Parametrelerle bağlanılıyor...")
+            conn = psycopg2.connect(
+                host=os.getenv('DB_HOST', 'zmmpuysxnwqngvlafolm.supabase.co'),
+                port=int(os.getenv('DB_PORT', '6543')),
+                database=os.getenv('DB_NAME', 'postgres'),
+                user=os.getenv('DB_USER', 'postgres.zmmpuysxnwqngvlafolm'),
+                password=os.getenv('DB_PASSWORD', 'ezZEvKzs!2em*h5'),
+                sslmode='require'
+            )
+        
         print(f"  ✅ Bağlantı başarılı!")
         return conn
     except Exception as e:
         print(f"  ❌ Veritabanı bağlantı hatası: {e}")
+        print(f"  💡 Lütfen .env dosyanızı kontrol edin")
         return None
 
 def init_database():
