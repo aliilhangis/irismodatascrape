@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-İyileştirilmiş Ürün Scraper v2.2
+İyileştirilmiş Ürün Scraper v2.3
 - Sitemap index support
 - PostgreSQL entegrasyonu (Supabase optimized)
 - Her site için özel pattern'ler  
@@ -91,31 +91,25 @@ def generate_sku(url, site_name):
     return f"{site_prefix}-{url_part[:30]}-{url_hash}"
 
 def get_db_connection():
-    """PostgreSQL bağlantısı oluştur (Supabase optimized)"""
+    """PostgreSQL bağlantısı oluştur (Supabase)"""
     try:
-        # Önce DATABASE_URL'yi dene (connection string)
-        database_url = os.getenv('DATABASE_URL')
+        # Supabase connection string
+        database_url = os.getenv(
+            'DATABASE_URL',
+            'postgresql://postgres:ezZEvKzs!2em*h5@db.zmmpuysxnwqngvlafolm.supabase.co:5432/postgres'
+        )
         
-        if database_url:
-            print(f"  🔌 Connection string ile bağlanılıyor...")
-            conn = psycopg2.connect(database_url)
-        else:
-            # Fallback: Ayrı parametrelerle bağlan
-            print(f"  🔌 Parametrelerle bağlanılıyor...")
-            conn = psycopg2.connect(
-                host=os.getenv('DB_HOST', 'zmmpuysxnwqngvlafolm.supabase.co'),
-                port=int(os.getenv('DB_PORT', '6543')),
-                database=os.getenv('DB_NAME', 'postgres'),
-                user=os.getenv('DB_USER', 'postgres.zmmpuysxnwqngvlafolm'),
-                password=os.getenv('DB_PASSWORD', 'ezZEvKzs!2em*h5'),
-                sslmode='require'
-            )
-        
+        print(f"  🔌 Supabase'e bağlanılıyor...")
+        conn = psycopg2.connect(database_url)
         print(f"  ✅ Bağlantı başarılı!")
         return conn
+        
     except Exception as e:
         print(f"  ❌ Veritabanı bağlantı hatası: {e}")
-        print(f"  💡 Lütfen .env dosyanızı kontrol edin")
+        print(f"  💡 Kontrol edin:")
+        print(f"     - Şifre doğru mu?")
+        print(f"     - .env dosyası var mı?")
+        print(f"     - psycopg2-binary kurulu mu?")
         return None
 
 def init_database():
@@ -125,16 +119,41 @@ def init_database():
     if conn:
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM products;")
-            count = cursor.fetchone()[0]
-            print(f"✅ Veritabanında şu anda {count} ürün var")
+            
+            # PostgreSQL versiyonunu kontrol et
+            cursor.execute("SELECT version();")
+            version = cursor.fetchone()[0]
+            print(f"  ℹ️ PostgreSQL: {version.split(',')[0]}")
+            
+            # Tablo var mı kontrol et
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_name = 'products';
+            """)
+            table_exists = cursor.fetchone()[0]
+            
+            if table_exists:
+                cursor.execute("SELECT COUNT(*) FROM products;")
+                count = cursor.fetchone()[0]
+                print(f"✅ Veritabanında şu anda {count} ürün var")
+            else:
+                print(f"⚠️ 'products' tablosu bulunamadı!")
+                print(f"💡 Lütfen önce tabloyu oluşturun:")
+                print(f"   Supabase SQL Editor'de CREATE TABLE scriptini çalıştırın")
+                cursor.close()
+                conn.close()
+                return False
+            
             cursor.close()
-        except Exception as e:
-            print(f"⚠️ Tablo sorgu hatası: {e}")
-            print("💡 'products' tablosunun oluşturulduğundan emin olun!")
-        finally:
             conn.close()
-        return True
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ Veritabanı hatası: {e}")
+            if conn:
+                conn.close()
+            return False
     else:
         print("⚠️ Veritabanı bağlantısı kurulamadı - sadece JSON'a kaydedilecek")
         return False
@@ -203,7 +222,7 @@ def save_product_to_db(product, site_name):
         return True
         
     except Exception as e:
-        print(f"      ❌ DB kayıt hatası: {str(e)}")
+        print(f"      ❌ DB kayıt hatası: {str(e)[:80]}")
         if conn:
             conn.rollback()
             conn.close()
