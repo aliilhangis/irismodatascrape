@@ -24,13 +24,14 @@ from dotenv import load_dotenv
 # .env dosyasını yükle
 load_dotenv()
 
-# PostgreSQL bağlantı ayarları (environment variables)
+# PostgreSQL bağlantı ayarları
+# ÖNCE .env'den oku, yoksa bu değerleri kullan
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
+    'host': os.getenv('DB_HOST', 'zmmpuysxnwqngvlafolm.supabase.co'),
     'port': int(os.getenv('DB_PORT', '5432')),
-    'database': os.getenv('DB_NAME', 'postgres'),
-    'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', ''),
+    'database': os.getenv('DB_NAME', 'irisfiyattakip'),
+    'user': os.getenv('DB_USER', 'irisfiyattakip'),
+    'password': os.getenv('DB_PASSWORD', 'ezZEvKzs!2em*h5'),
 }
 
 # TEST MODE - Sadece ilk N ürünü scrape et (0 = tümü)
