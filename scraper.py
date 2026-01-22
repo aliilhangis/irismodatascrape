@@ -32,6 +32,7 @@ DB_CONFIG = {
     'database': os.getenv('DB_NAME', 'irisfiyattakip'),
     'user': os.getenv('DB_USER', 'irisfiyattakip'),
     'password': os.getenv('DB_PASSWORD', 'ezZEvKzs!2em*h5'),
+    'sslmode': 'require',
 }
 
 # TEST MODE - Sadece ilk N ürünü scrape et (0 = tümü)
