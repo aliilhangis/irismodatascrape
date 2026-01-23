@@ -31,7 +31,7 @@ DB_CONFIG = {
     'port': int(os.getenv('DB_PORT', '5432')),
     'database': os.getenv('DB_NAME', 'irisfiyattakip'),
     'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', 'ezZEvKzs!2em*h5'),
+    'password': os.getenv('DB_PASSWORD', 'Ali.1995Ft2828'),
 }
 
 # TEST MODE - Sadece ilk N ürünü scrape et (0 = tümü)
