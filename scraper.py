@@ -1,36 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-İyileştirilmiş Ürün Scraper v2.5 - SQLAlchemy
+İyileştirilmiş Ürün Scraper v3.0 - Supabase SDK
 - Sitemap index support
-- SQLAlchemy ile Supabase entegrasyonu
+- Supabase REST API (Railway compatible)
 - Her site için özel pattern'ler  
 """
 
 import requests
 from bs4 import BeautifulSoup
 import json
-from urllib.parse import quote_plus
 import time
 import re
 from xml.etree import ElementTree as ET
-from sqlalchemy import create_engine, text
-from sqlalchemy.pool import NullPool
+from supabase import create_client
 from datetime import datetime
 import hashlib
 
 # TEST MODE - Sadece ilk N ürünü scrape et (0 = tümü)
 TEST_LIMIT = 10  # Test için 10 ürün, production'da 0 yapın
 
-# Supabase Connection String (SQLAlchemy)
-# Railway için Connection Pooler kullanıyoruz
-password = quote_plus('ezZEvKzs!2em*h5')
+# Supabase Configuration
+SUPABASE_URL = "https://zmmpuysxnwqngvlafolm.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InptbXB1eXN4bndxbmd2bGFmb2xtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwNjA0MTAsImV4cCI6MjA4NDYzNjQxMH0.4Q7k-cDcaGhOurMlofG8lkd4ApPyYexxkMdXxH-lI0k"
 
-# Transaction Mode Pooler (Railway için önerilen)
-DATABASE_URL = f'postgresql://postgres.zmmpuysxnwqngvlafolm:Ali.1995Ft2828@aws-0-eu-central-1.pooler.supabase.com:6543/postgres'
-
-# SQLAlchemy engine
-db_engine = None
+# Supabase client
+supabase = None
 
 # Site konfigürasyonları
 SITE_CONFIGS = {
@@ -92,99 +87,33 @@ def generate_sku(url, site_name):
     url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
     return f"{site_prefix}-{url_part[:30]}-{url_hash}"
 
-def get_db_connection():
-    """SQLAlchemy engine oluştur"""
-    global db_engine
+def init_supabase():
+    """Supabase client'ı başlat"""
+    global supabase
     try:
-        if db_engine is None:
-            print(f"  🔌 SQLAlchemy ile bağlanılıyor...")
-            
-            # IPv4 zorla + connection pooler
-            db_engine = create_engine(
-                DATABASE_URL,
-                poolclass=NullPool,
-                echo=False,
-                connect_args={
-                    'connect_timeout': 10,
-                    'options': '-c statement_timeout=30000'
-                }
-            )
-            
-            # Test sorgusu
-            with db_engine.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                result.fetchone()
-            
-            print(f"  ✅ Bağlantı başarılı!")
+        print("\n🔍 Supabase bağlantısı test ediliyor...")
+        print(f"  🔌 REST API ile bağlanılıyor...")
         
-        return db_engine
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        
+        # Test sorgusu
+        result = supabase.table('products').select("count", count='exact').execute()
+        count = result.count if hasattr(result, 'count') else 0
+        
+        print(f"  ✅ Bağlantı başarılı!")
+        print(f"✅ Veritabanında şu anda {count} ürün var")
+        
+        return True
         
     except Exception as e:
         print(f"  ❌ Bağlantı hatası: {e}")
-        print(f"  💡 Alternatif: Session Mode deneniyor...")
-        
-        # Alternatif: Session Mode (port 5432)
-        try:
-            alt_url = DATABASE_URL.replace(':6543/', ':5432/')
-            db_engine = create_engine(
-                alt_url,
-                poolclass=NullPool,
-                echo=False,
-                connect_args={'connect_timeout': 10}
-            )
-            
-            with db_engine.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                result.fetchone()
-            
-            print(f"  ✅ Session Mode ile bağlandı!")
-            return db_engine
-            
-        except Exception as e2:
-            print(f"  ❌ Session Mode da başarısız: {e2}")
-            return None
-
-def init_database():
-    """Veritabanı bağlantısını test et"""
-    print("\n🔍 Veritabanı bağlantısı test ediliyor...")
-    
-    engine = get_db_connection()
-    if engine:
-        try:
-            with engine.connect() as conn:
-                result = conn.execute(text("SELECT version();"))
-                version = result.fetchone()[0]
-                print(f"  ℹ️ PostgreSQL: {version.split(',')[0]}")
-                
-                result = conn.execute(text("""
-                    SELECT COUNT(*) 
-                    FROM information_schema.tables 
-                    WHERE table_name = 'products';
-                """))
-                table_exists = result.fetchone()[0]
-                
-                if table_exists:
-                    result = conn.execute(text("SELECT COUNT(*) FROM products;"))
-                    count = result.fetchone()[0]
-                    print(f"✅ Veritabanında şu anda {count} ürün var")
-                else:
-                    print(f"⚠️ 'products' tablosu bulunamadı!")
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            print(f"⚠️ Veritabanı hatası: {e}")
-            return False
-    else:
-        print("⚠️ Veritabanı bağlantısı kurulamadı - sadece JSON'a kaydedilecek")
+        print(f"  ℹ️ Supabase anon key doğru mu kontrol edin")
         return False
 
 def save_product_to_db(product, site_name):
-    """Ürünü veritabanına kaydet (SQLAlchemy)"""
+    """Ürünü Supabase'e kaydet (REST API)"""
     try:
-        engine = get_db_connection()
-        if not engine:
+        if not supabase:
             return False
         
         sku = generate_sku(product['url'], site_name)
@@ -197,41 +126,24 @@ def save_product_to_db(product, site_name):
             'scraped_at': datetime.now().isoformat()
         }
         
-        now = datetime.now()
+        now = datetime.now().isoformat()
         
-        with engine.connect() as conn:
-            query = text("""
-            INSERT INTO products 
-                (sku, name, price, stock_status, url, product_name, product_url, 
-                 stock_data, scraped_at, updated_at)
-            VALUES 
-                (:sku, :name, :price, :stock_status, :url, :product_name, :product_url, 
-                 :stock_data::jsonb, :scraped_at, :updated_at)
-            ON CONFLICT (sku) 
-            DO UPDATE SET
-                name = EXCLUDED.name,
-                price = EXCLUDED.price,
-                stock_status = EXCLUDED.stock_status,
-                product_name = EXCLUDED.product_name,
-                stock_data = EXCLUDED.stock_data,
-                scraped_at = EXCLUDED.scraped_at,
-                updated_at = EXCLUDED.updated_at
-            """)
-            
-            conn.execute(query, {
-                'sku': sku,
-                'name': product['title'],
-                'price': product['price'],
-                'stock_status': stock_status,
-                'url': product['url'],
-                'product_name': product['title'],
-                'product_url': product['url'],
-                'stock_data': json.dumps(stock_data),
-                'scraped_at': now,
-                'updated_at': now
-            })
-            
-            conn.commit()
+        # Upsert (insert or update)
+        data = {
+            'sku': sku,
+            'name': product['title'],
+            'price': product['price'],
+            'stock_status': stock_status,
+            'url': product['url'],
+            'product_name': product['title'],
+            'product_url': product['url'],
+            'stock_data': stock_data,
+            'scraped_at': now,
+            'updated_at': now
+        }
+        
+        # Upsert: conflict on sku
+        supabase.table('products').upsert(data, on_conflict='sku').execute()
         
         return True
         
@@ -446,13 +358,13 @@ def scrape_site(config, db_enabled=False):
 def main():
     """Ana fonksiyon"""
     print(f"\n{'='*70}")
-    print("🚀 ÜRÜN SCRAPER BAŞLATILIYOR (SQLAlchemy v2.5)")
+    print("🚀 ÜRÜN SCRAPER BAŞLATILIYOR (Supabase SDK v3.0)")
     print(f"{'='*70}")
     
-    db_enabled = init_database()
+    db_enabled = init_supabase()
     
     if db_enabled:
-        print("💾 Veriler hem JSON hem PostgreSQL'e kaydedilecek")
+        print("💾 Veriler hem JSON hem Supabase'e kaydedilecek")
     else:
         print("📝 Veriler sadece JSON'a kaydedilecek")
     
@@ -491,7 +403,7 @@ def main():
     
     print(f"\n✅ JSON: '{output_file}' dosyasına kaydedildi")
     if db_enabled:
-        print(f"✅ PostgreSQL: Tüm ürünler veritabanına kaydedildi")
+        print(f"✅ Supabase: Tüm ürünler veritabanına kaydedildi")
     print(f"{'='*70}\n")
 
 if __name__ == "__main__":
