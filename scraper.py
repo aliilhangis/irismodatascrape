@@ -23,9 +23,11 @@ import hashlib
 TEST_LIMIT = 10  # Test için 10 ürün, production'da 0 yapın
 
 # Supabase Connection String (SQLAlchemy)
-# Şifreyi URL encode ediyoruz (özel karakterler için)
+# Railway için Connection Pooler kullanıyoruz
 password = quote_plus('ezZEvKzs!2em*h5')
-DATABASE_URL = f'postgresql://postgres:Ali.1995Ft2828@db.zmmpuysxnwqngvlafolm.supabase.co:5432/postgres'
+
+# Transaction Mode Pooler (Railway için önerilen)
+DATABASE_URL = f'postgresql://postgres.zmmpuysxnwqngvlafolm:Ali.1995Ft2828@aws-0-eu-central-1.pooler.supabase.com:6543/postgres'
 
 # SQLAlchemy engine
 db_engine = None
@@ -96,10 +98,16 @@ def get_db_connection():
     try:
         if db_engine is None:
             print(f"  🔌 SQLAlchemy ile bağlanılıyor...")
+            
+            # IPv4 zorla + connection pooler
             db_engine = create_engine(
                 DATABASE_URL,
                 poolclass=NullPool,
-                echo=False
+                echo=False,
+                connect_args={
+                    'connect_timeout': 10,
+                    'options': '-c statement_timeout=30000'
+                }
             )
             
             # Test sorgusu
@@ -113,7 +121,28 @@ def get_db_connection():
         
     except Exception as e:
         print(f"  ❌ Bağlantı hatası: {e}")
-        return None
+        print(f"  💡 Alternatif: Session Mode deneniyor...")
+        
+        # Alternatif: Session Mode (port 5432)
+        try:
+            alt_url = DATABASE_URL.replace(':6543/', ':5432/')
+            db_engine = create_engine(
+                alt_url,
+                poolclass=NullPool,
+                echo=False,
+                connect_args={'connect_timeout': 10}
+            )
+            
+            with db_engine.connect() as conn:
+                result = conn.execute(text("SELECT 1"))
+                result.fetchone()
+            
+            print(f"  ✅ Session Mode ile bağlandı!")
+            return db_engine
+            
+        except Exception as e2:
+            print(f"  ❌ Session Mode da başarısız: {e2}")
+            return None
 
 def init_database():
     """Veritabanı bağlantısını test et"""
