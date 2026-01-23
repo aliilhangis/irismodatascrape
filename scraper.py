@@ -30,7 +30,7 @@ DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'zmmpuysxnwqngvlafolm.supabase.co'),
     'port': int(os.getenv('DB_PORT', '5432')),
     'database': os.getenv('DB_NAME', 'irisfiyattakip'),
-    'user': os.getenv('DB_USER', 'postgres'),
+    'user': os.getenv('DB_USER', 'irisfiyattakip'),
     'password': os.getenv('DB_PASSWORD', 'Ali.1995Ft2828'),
 }
 
