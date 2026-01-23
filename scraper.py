@@ -1,41 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-İyileştirilmiş Ürün Scraper v2.1
+İyileştirilmiş Ürün Scraper v2.5 - SQLAlchemy
 - Sitemap index support
-- PostgreSQL entegrasyonu
+- SQLAlchemy ile Supabase entegrasyonu
 - Her site için özel pattern'ler  
 """
 
 import requests
 from bs4 import BeautifulSoup
 import json
-from urllib.parse import urljoin
+from urllib.parse import quote_plus
 import time
 import re
 from xml.etree import ElementTree as ET
-import psycopg2
-from psycopg2.extras import Json
-import os
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 from datetime import datetime
 import hashlib
-from dotenv import load_dotenv
-
-# .env dosyasını yükle
-load_dotenv()
-
-# PostgreSQL bağlantı ayarları
-# ÖNCE .env'den oku, yoksa bu değerleri kullan
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'zmmpuysxnwqngvlafolm.supabase.co'),
-    'port': int(os.getenv('DB_PORT', '5432')),
-    'database': os.getenv('DB_NAME', 'irisfiyattakip'),
-    'user': os.getenv('DB_USER', 'irisfiyattakip'),
-    'password': os.getenv('DB_PASSWORD', 'Ali.1995Ft2828'),
-}
 
 # TEST MODE - Sadece ilk N ürünü scrape et (0 = tümü)
 TEST_LIMIT = 10  # Test için 10 ürün, production'da 0 yapın
+
+# Supabase Connection String (SQLAlchemy)
+# Şifreyi URL encode ediyoruz (özel karakterler için)
+password = quote_plus('ezZEvKzs!2em*h5')
+DATABASE_URL = f'postgresql://postgres:{Ali.1995Ft2828}@db.zmmpuysxnwqngvlafolm.supabase.co:5432/postgres'
+
+# SQLAlchemy engine
+db_engine = None
 
 # Site konfigürasyonları
 SITE_CONFIGS = {
@@ -92,63 +85,82 @@ SITE_CONFIGS = {
 
 def generate_sku(url, site_name):
     """URL'den benzersiz SKU oluştur"""
-    # URL'nin son kısmını al
     url_part = url.rstrip('/').split('/')[-1]
-    # Site prefix ekle
     site_prefix = site_name[:3].upper()
-    # Hash oluştur (kısa tutmak için ilk 8 karakter)
     url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
     return f"{site_prefix}-{url_part[:30]}-{url_hash}"
 
 def get_db_connection():
-    """PostgreSQL bağlantısı oluştur"""
+    """SQLAlchemy engine oluştur"""
+    global db_engine
     try:
-        print(f"  🔌 Bağlantı deneniyor: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
-        conn = psycopg2.connect(**DB_CONFIG)
-        print(f"  ✅ Bağlantı başarılı!")
-        return conn
+        if db_engine is None:
+            print(f"  🔌 SQLAlchemy ile bağlanılıyor...")
+            db_engine = create_engine(
+                DATABASE_URL,
+                poolclass=NullPool,
+                echo=False
+            )
+            
+            # Test sorgusu
+            with db_engine.connect() as conn:
+                result = conn.execute(text("SELECT 1"))
+                result.fetchone()
+            
+            print(f"  ✅ Bağlantı başarılı!")
+        
+        return db_engine
+        
     except Exception as e:
-        print(f"  ❌ Veritabanı bağlantı hatası: {e}")
+        print(f"  ❌ Bağlantı hatası: {e}")
         return None
 
 def init_database():
     """Veritabanı bağlantısını test et"""
     print("\n🔍 Veritabanı bağlantısı test ediliyor...")
-    conn = get_db_connection()
-    if conn:
+    
+    engine = get_db_connection()
+    if engine:
         try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM products;")
-            count = cursor.fetchone()[0]
-            print(f"✅ Veritabanında şu anda {count} ürün var")
-            cursor.close()
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT version();"))
+                version = result.fetchone()[0]
+                print(f"  ℹ️ PostgreSQL: {version.split(',')[0]}")
+                
+                result = conn.execute(text("""
+                    SELECT COUNT(*) 
+                    FROM information_schema.tables 
+                    WHERE table_name = 'products';
+                """))
+                table_exists = result.fetchone()[0]
+                
+                if table_exists:
+                    result = conn.execute(text("SELECT COUNT(*) FROM products;"))
+                    count = result.fetchone()[0]
+                    print(f"✅ Veritabanında şu anda {count} ürün var")
+                else:
+                    print(f"⚠️ 'products' tablosu bulunamadı!")
+                    return False
+            
+            return True
+            
         except Exception as e:
-            print(f"⚠️ Tablo sorgu hatası: {e}")
-            print("💡 'products' tablosunun oluşturulduğundan emin olun!")
-        finally:
-            conn.close()
-        return True
+            print(f"⚠️ Veritabanı hatası: {e}")
+            return False
     else:
         print("⚠️ Veritabanı bağlantısı kurulamadı - sadece JSON'a kaydedilecek")
         return False
 
 def save_product_to_db(product, site_name):
-    """Ürünü veritabanına kaydet"""
-    conn = None
+    """Ürünü veritabanına kaydet (SQLAlchemy)"""
     try:
-        conn = get_db_connection()
-        if not conn:
+        engine = get_db_connection()
+        if not engine:
             return False
         
-        cursor = conn.cursor()
-        
-        # SKU oluştur
         sku = generate_sku(product['url'], site_name)
-        
-        # Stock status belirle
         stock_status = 'in_stock' if product['price'] is not None else 'unknown'
         
-        # Stock data oluştur
         stock_data = {
             'site': site_name,
             'currency': product.get('currency'),
@@ -156,67 +168,60 @@ def save_product_to_db(product, site_name):
             'scraped_at': datetime.now().isoformat()
         }
         
-        # Insert veya update
-        query = """
-        INSERT INTO products 
-            (sku, name, price, stock_status, url, product_name, product_url, 
-             stock_data, scraped_at, updated_at)
-        VALUES 
-            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (sku) 
-        DO UPDATE SET
-            name = EXCLUDED.name,
-            price = EXCLUDED.price,
-            stock_status = EXCLUDED.stock_status,
-            product_name = EXCLUDED.product_name,
-            stock_data = EXCLUDED.stock_data,
-            scraped_at = EXCLUDED.scraped_at,
-            updated_at = EXCLUDED.updated_at
-        """
-        
         now = datetime.now()
         
-        cursor.execute(query, (
-            sku,
-            product['title'],
-            product['price'],
-            stock_status,
-            product['url'],
-            product['title'],
-            product['url'],
-            Json(stock_data),
-            now,
-            now
-        ))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
+        with engine.connect() as conn:
+            query = text("""
+            INSERT INTO products 
+                (sku, name, price, stock_status, url, product_name, product_url, 
+                 stock_data, scraped_at, updated_at)
+            VALUES 
+                (:sku, :name, :price, :stock_status, :url, :product_name, :product_url, 
+                 :stock_data::jsonb, :scraped_at, :updated_at)
+            ON CONFLICT (sku) 
+            DO UPDATE SET
+                name = EXCLUDED.name,
+                price = EXCLUDED.price,
+                stock_status = EXCLUDED.stock_status,
+                product_name = EXCLUDED.product_name,
+                stock_data = EXCLUDED.stock_data,
+                scraped_at = EXCLUDED.scraped_at,
+                updated_at = EXCLUDED.updated_at
+            """)
+            
+            conn.execute(query, {
+                'sku': sku,
+                'name': product['title'],
+                'price': product['price'],
+                'stock_status': stock_status,
+                'url': product['url'],
+                'product_name': product['title'],
+                'product_url': product['url'],
+                'stock_data': json.dumps(stock_data),
+                'scraped_at': now,
+                'updated_at': now
+            })
+            
+            conn.commit()
         
         return True
         
     except Exception as e:
-        print(f"      ❌ DB kayıt hatası: {str(e)}")
-        if conn:
-            conn.rollback()
-            conn.close()
+        print(f"      ❌ DB kayıt hatası: {str(e)[:80]}")
         return False
 
 def get_sitemap_urls(sitemap_url):
     """Sitemap'ten URL'leri çeker"""
     try:
-        print(f"  Fetching: {sitemap_url}")
         response = requests.get(sitemap_url, timeout=15)
         response.raise_for_status()
         
         urls = []
         root = ET.fromstring(response.content)
         
-        # <loc> taglerini bul
         for loc in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):
             urls.append(loc.text.strip())
         
-        # Namespace olmadan da dene
         if not urls:
             for loc in root.findall('.//loc'):
                 urls.append(loc.text.strip())
@@ -317,7 +322,7 @@ def scrape_product(url, config, db_enabled=False):
     """Ürün scrape et"""
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
         response = requests.get(url, headers=headers, timeout=15)
@@ -336,14 +341,12 @@ def scrape_product(url, config, db_enabled=False):
             'url': url
         }
         
-        # Veritabanına kaydet
         if db_enabled:
             db_success = save_product_to_db(product_data, config['name'])
             db_icon = "💾" if db_success else "⚠️"
         else:
             db_icon = "📝"
         
-        # Log
         if price is not None:
             print(f"    {db_icon} {title[:45]}... - {price} {currency}")
         else:
@@ -381,7 +384,6 @@ def scrape_site(config, db_enabled=False):
     
     all_product_urls = list(set(all_product_urls))
     
-    # TEST LIMIT uygula
     if TEST_LIMIT > 0:
         print(f"\n⚠️ TEST MODU: Sadece ilk {TEST_LIMIT} ürün işlenecek")
         all_product_urls = all_product_urls[:TEST_LIMIT]
@@ -390,11 +392,7 @@ def scrape_site(config, db_enabled=False):
         print("\n✗ Hiç ürün URL'si bulunamadı")
         return products
     
-    print(f"\n📊 Toplam: {len(all_product_urls)} benzersiz ürün URL'si")
-    print(f"\n🔍 İlk 3 URL örneği:")
-    for url in all_product_urls[:3]:
-        print(f"  • {url}")
-    
+    print(f"\n📊 Toplam: {len(all_product_urls)} ürün işlenecek")
     print(f"\n⚙️ Ürünler scrape ediliyor...")
     print(f"{'─'*70}")
     
@@ -419,10 +417,9 @@ def scrape_site(config, db_enabled=False):
 def main():
     """Ana fonksiyon"""
     print(f"\n{'='*70}")
-    print("🚀 ÜRÜN SCRAPER BAŞLATILIYOR")
+    print("🚀 ÜRÜN SCRAPER BAŞLATILIYOR (SQLAlchemy v2.5)")
     print(f"{'='*70}")
     
-    # Veritabanı kontrolü
     db_enabled = init_database()
     
     if db_enabled:
@@ -448,12 +445,10 @@ def main():
         
         all_products.extend(products)
     
-    # JSON'a kaydet
     output_file = 'products.json'
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(all_products, f, ensure_ascii=False, indent=2)
     
-    # Özet
     print(f"\n{'='*70}")
     print("📊 ÖZET İSTATİSTİKLER")
     print(f"{'='*70}")
