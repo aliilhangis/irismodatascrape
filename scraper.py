@@ -25,7 +25,7 @@ TEST_LIMIT = 10  # Test için 10 ürün, production'da 0 yapın
 # Supabase Connection String (SQLAlchemy)
 # Şifreyi URL encode ediyoruz (özel karakterler için)
 password = quote_plus('ezZEvKzs!2em*h5')
-DATABASE_URL = f'postgresql://postgres:Ali.1995Ft2828}@db.zmmpuysxnwqngvlafolm.supabase.co:5432/postgres'
+DATABASE_URL = f'postgresql://postgres:Ali.1995Ft2828@db.zmmpuysxnwqngvlafolm.supabase.co:5432/postgres'
 
 # SQLAlchemy engine
 db_engine = None
