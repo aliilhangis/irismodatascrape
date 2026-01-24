@@ -85,12 +85,45 @@ def save_product_to_db(product, site_name):
             return False
         
         sku = generate_sku(product['url'], site_name)
-        stock_status = 'in_stock' if product['price'] is not None else 'unknown'
+        new_price = product['price']
         
+        # Mevcut ürünü kontrol et
+        existing = supabase.table('products').select('price, previous_price').eq('sku', sku).execute()
+        
+        old_price = None
+        previous_price = None
+        price_change = None
+        price_changed_at = None
+        
+        if existing.data and len(existing.data) > 0:
+            # Ürün var, fiyat karşılaştır
+            old_price = existing.data[0].get('price')
+            
+            if old_price is not None and new_price is not None:
+                if float(old_price) != float(new_price):
+                    # Fiyat değişmiş!
+                    previous_price = old_price
+                    price_change = float(new_price) - float(old_price)
+                    price_changed_at = datetime.now().isoformat()
+                    print(f"      💰 Fiyat değişti: {old_price} → {new_price} ({price_change:+.2f})")
+                else:
+                    # Fiyat aynı, önceki değerleri koru
+                    previous_price = existing.data[0].get('previous_price')
+            else:
+                # Yeni fiyat yoksa önceki değerleri koru
+                previous_price = existing.data[0].get('previous_price')
+        
+        # Stock status
+        stock_status = 'in_stock' if new_price is not None else 'unknown'
+        
+        # Data hazırla
         data = {
             'sku': sku,
             'name': product['title'],
-            'price': product['price'],
+            'price': new_price,
+            'previous_price': previous_price,
+            'price_change': price_change,
+            'price_changed_at': price_changed_at,
             'stock_status': stock_status,
             'url': product['url'],
             'product_name': product['title'],
@@ -98,7 +131,7 @@ def save_product_to_db(product, site_name):
             'stock_data': {
                 'site': site_name,
                 'currency': product.get('currency'),
-                'last_seen_price': product.get('price'),
+                'last_seen_price': new_price,
                 'scraped_at': datetime.now().isoformat()
             },
             'scraped_at': datetime.now().isoformat(),
