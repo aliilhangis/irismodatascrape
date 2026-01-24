@@ -134,7 +134,7 @@ def get_sitemap_urls(sitemap_url):
         return []
 
 def get_product_sitemaps(config):
-    sitemap_url = config.get('sitemap_url', '')  # ✅ DOĞRU
+    sitemap_url = config['sitemap_url']
     sitemap_type = config.get('sitemap_type', 'direct')
     
     if sitemap_type == 'direct':
