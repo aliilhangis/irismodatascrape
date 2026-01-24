@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Ürün Scraper v3.1 - Supabase SDK
-Railway + Supabase uyumlu
-"""
+"""Ürün Scraper v3.2"""
 
 import requests
 from bs4 import BeautifulSoup
@@ -15,16 +12,13 @@ from supabase import create_client
 from datetime import datetime
 import hashlib
 
-# TEST MODE
 TEST_LIMIT = 10
 
-# Supabase
 SUPABASE_URL = "https://zmmpuysxnwqngvlafolm.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InptbXB1eXN4bndxbmd2bGFmb2xtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwNjA0MTAsImV4cCI6MjA4NDYzNjQxMH0.4Q7k-cDcaGhOurMlofG8lkd4ApPyYexxkMdXxH-lI0k"
 
 supabase = None
 
-# Site configs
 SITE_CONFIGS = {
     'technopluskibris.com': {
         'name': 'TECHNOPLUSKIBRIS',
@@ -52,11 +46,11 @@ SITE_CONFIGS = {
     },
     'irismostore.com': {
         'name': 'IRISMOSTORE',
+        'sitemap_type': 'multi',
         'sitemap_urls': [
             'https://www.irismostore.com/xml/sitemap_product_1.xml?sr=689361be13f3c',
             'https://www.irismostore.com/xml/sitemap_product_2.xml?sr=689361be28cb1'
         ],
-        'sitemap_type': 'multi',
         'product_url_pattern': r'/urun/',
         'selectors': {
             'title': ['h1', '.product-title', 'title'],
@@ -134,8 +128,14 @@ def get_sitemap_urls(sitemap_url):
         return []
 
 def get_product_sitemaps(config):
-    sitemap_url = config['sitemap_url']
     sitemap_type = config.get('sitemap_type', 'direct')
+    
+    if sitemap_type == 'multi':
+        return config.get('sitemap_urls', [])
+    
+    sitemap_url = config.get('sitemap_url')
+    if not sitemap_url:
+        return []
     
     if sitemap_type == 'direct':
         return [sitemap_url]
@@ -181,8 +181,8 @@ def extract_price(soup, selectors):
                 else:
                     price_text = element.get_text(strip=True)
                 
-                price_text = price_text.replace(',', '').replace(' ', '')
-                price_match = re.search(r'(\d+\.?\d*)', price_text)
+                price_text = price_text.replace(',', '').replace(' ', '').replace('.', '')
+                price_match = re.search(r'(\d+)', price_text)
                 
                 if price_match:
                     price = float(price_match.group(1))
@@ -284,7 +284,7 @@ def scrape_site(config, db_enabled=False):
 
 def main():
     print(f"\n{'='*70}")
-    print("🚀 SCRAPER v3.1")
+    print("🚀 SCRAPER v3.2")
     print(f"{'='*70}")
     
     db_enabled = init_supabase()
