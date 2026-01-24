@@ -49,6 +49,20 @@ SITE_CONFIGS = {
             'price': ['span[itemprop="price"]', '.oe_currency_value', 'span.oe_price', '.product_price span'],
             'currency': 'USD'
         }
+    },
+    'irismostore.com': {
+        'name': 'IRISMOSTORE',
+        'sitemap_urls': [
+            'https://www.irismostore.com/xml/sitemap_product_1.xml?sr=689361be13f3c',
+            'https://www.irismostore.com/xml/sitemap_product_2.xml?sr=689361be28cb1'
+        ],
+        'sitemap_type': 'multi',
+        'product_url_pattern': r'/urun/',
+        'selectors': {
+            'title': ['h1', '.product-title', 'title'],
+            'price': ['.product-price', 'h3', 'span.price'],
+            'currency': 'TL'
+        }
     }
 }
 
