@@ -12,7 +12,7 @@ from supabase import create_client
 from datetime import datetime
 import hashlib
 
-TEST_LIMIT = 10
+TEST_LIMIT = 0  # 0 = Tüm ürünleri scrape et
 
 SUPABASE_URL = "https://zmmpuysxnwqngvlafolm.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InptbXB1eXN4bndxbmd2bGFmb2xtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwNjA0MTAsImV4cCI6MjA4NDYzNjQxMH0.4Q7k-cDcaGhOurMlofG8lkd4ApPyYexxkMdXxH-lI0k"
