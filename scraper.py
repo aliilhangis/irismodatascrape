@@ -214,13 +214,19 @@ def extract_price(soup, selectors):
                 else:
                     price_text = element.get_text(strip=True)
                 
-                price_text = price_text.replace(',', '').replace(' ', '').replace('.', '')
-                price_match = re.search(r'(\d+)', price_text)
+                # Fiyat parse - virgül ve boşlukları temizle
+                price_text = price_text.replace(',', '').replace(' ', '')
                 
-                if price_match:
-                    price = float(price_match.group(1))
-                    if price > 0:
-                        return price
+                # Sadece rakam ve nokta bırak
+                price_text = re.sub(r'[^\d.]', '', price_text)
+                
+                if price_text:
+                    try:
+                        price = float(price_text)
+                        if price > 0:
+                            return price
+                    except:
+                        continue
         except:
             continue
     return None
