@@ -54,8 +54,8 @@ SITE_CONFIGS = {
         'product_url_pattern': r'/urun/',
         'selectors': {
             'title': ['h1', '.product-title', 'title'],
-            'price': ['h3:contains("USD")', '.product-price h3'],  # USD içeren h3
-            'currency': 'USD'  # TL değil USD
+            'price': ['.product-price', 'h3', 'span.price'],
+            'currency': 'TL'
         }
     }
 }
