@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Ürün Scraper v3.2"""
+"""Ürün Scraper v3.3 - Database URL Source"""
 
 import requests
 from bs4 import BeautifulSoup
 import json
 import time
 import re
-from xml.etree import ElementTree as ET
 from supabase import create_client
 from datetime import datetime
+from urllib.parse import urlparse
 import hashlib
 
 TEST_LIMIT = 0  # 0 = Tüm ürünleri scrape et
@@ -22,10 +22,6 @@ supabase = None
 SITE_CONFIGS = {
     'technopluskibris.com': {
         'name': 'TECHNOPLUSKIBRIS',
-        'sitemap_url': 'https://technopluskibris.com/sitemap.xml',
-        'sitemap_type': 'index',
-        'product_sitemap_pattern': r'products_\d+\.xml',
-        'product_url_pattern': r'/prd-',
         'selectors': {
             'title': ['h1.product-name', 'h1.product-title', '.product-detail h1', 'h1', 'title'],
             'price': ['.product-price span', '.product-price', 'span[class*="price"]', 'div[class*="price"]'],
@@ -34,10 +30,6 @@ SITE_CONFIGS = {
     },
     'durmazz.com': {
         'name': 'DURMAZZ',
-        'sitemap_url': 'https://www.durmazz.com/sitemap.xml',
-        'sitemap_type': 'direct',
-        'product_url_pattern': r'/shop/[\w\-]+-\d+$',
-        'exclude_patterns': [r'/cart', r'/wishlist', r'/category', r'/checkout'],
         'selectors': {
             'title': ['h1[itemprop="name"]', '.product-title h1', 'h1.product-name', 'h1', 'title'],
             'price': ['span[itemprop="price"]', '.oe_currency_value', 'span.oe_price', '.product_price span'],
@@ -46,12 +38,6 @@ SITE_CONFIGS = {
     },
     'irismostore.com': {
         'name': 'IRISMOSTORE',
-        'sitemap_type': 'multi',
-        'sitemap_urls': [
-            'https://www.irismostore.com/xml/sitemap_product_1.xml?sr=689361be13f3c',
-            'https://www.irismostore.com/xml/sitemap_product_2.xml?sr=689361be28cb1'
-        ],
-        'product_url_pattern': r'/urun/',
         'selectors': {
             'title': ['h1', '.product-title', 'title'],
             'price': ['.product-price', 'h3', 'span.price'],
@@ -78,6 +64,40 @@ def init_supabase():
     except Exception as e:
         print(f"  ❌ Hata: {e}")
         return False
+
+def get_urls_from_database():
+    """productofsitemapcrawl tablosundan URL'leri çeker"""
+    try:
+        print("\n📥 Veritabanından URL'ler çekiliyor...")
+        response = supabase.table('productofsitemapcrawl').select('id, url, anawebsite').execute()
+        
+        if response.data:
+            print(f"  ✅ {len(response.data)} URL bulundu")
+            return response.data
+        else:
+            print("  ⚠️ Veritabanında URL bulunamadı")
+            return []
+    except Exception as e:
+        print(f"  ❌ Hata: {e}")
+        return []
+
+def get_site_config_from_url(url):
+    """URL'den site config'ini belirler"""
+    domain = urlparse(url).netloc.replace('www.', '')
+    
+    for config_domain, config in SITE_CONFIGS.items():
+        if config_domain in domain:
+            return config
+    
+    # Default config (eğer tanımlı değilse)
+    return {
+        'name': domain.upper().replace('.', ''),
+        'selectors': {
+            'title': ['h1', '.product-title', 'title'],
+            'price': ['.price', 'span.price', '.product-price'],
+            'currency': 'TL'
+        }
+    }
 
 def save_product_to_db(product, site_name):
     try:
@@ -143,66 +163,6 @@ def save_product_to_db(product, site_name):
     except Exception as e:
         print(f"      ❌ DB: {str(e)[:50]}")
         return False
-
-def get_sitemap_urls(sitemap_url):
-    try:
-        response = requests.get(sitemap_url, timeout=15)
-        response.raise_for_status()
-        urls = []
-        root = ET.fromstring(response.content)
-        for loc in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):
-            urls.append(loc.text.strip())
-        if not urls:
-            for loc in root.findall('.//loc'):
-                urls.append(loc.text.strip())
-        return urls
-    except Exception as e:
-        print(f"  ✗ Sitemap: {e}")
-        return []
-
-def get_product_sitemaps(config):
-    sitemap_type = config.get('sitemap_type', 'direct')
-    
-    if sitemap_type == 'multi':
-        return config.get('sitemap_urls', [])
-    
-    sitemap_url = config.get('sitemap_url')
-    if not sitemap_url:
-        return []
-    
-    if sitemap_type == 'direct':
-        return [sitemap_url]
-    
-    print(f"📑 Sitemap index okunuyor...")
-    all_sitemaps = get_sitemap_urls(sitemap_url)
-    if not all_sitemaps:
-        return []
-    
-    product_sitemap_pattern = config.get('product_sitemap_pattern', '')
-    product_sitemaps = []
-    for sitemap in all_sitemaps:
-        if product_sitemap_pattern and re.search(product_sitemap_pattern, sitemap):
-            product_sitemaps.append(sitemap)
-    
-    print(f"  ✓ {len(product_sitemaps)} sitemap bulundu")
-    return product_sitemaps
-
-def filter_product_urls(urls, config):
-    product_urls = []
-    product_pattern = config.get('product_url_pattern', '')
-    exclude_patterns = config.get('exclude_patterns', [])
-    
-    for url in urls:
-        if product_pattern and re.search(product_pattern, url):
-            is_excluded = False
-            for exclude_pattern in exclude_patterns:
-                if re.search(exclude_pattern, url):
-                    is_excluded = True
-                    break
-            if not is_excluded:
-                product_urls.append(url)
-    
-    return product_urls
 
 def extract_price(soup, selectors):
     for selector in selectors:
@@ -272,46 +232,59 @@ def scrape_product(url, config, db_enabled=False):
         print(f"    ✗ Error: {str(e)[:50]}")
         return None
 
-def scrape_site(config, db_enabled=False):
+def scrape_from_database(db_enabled=False):
+    """Veritabanından URL'leri çekip scrape eder"""
     print(f"\n{'='*70}")
-    print(f"🏪 {config['name']}")
+    print(f"🗄️ VERİTABANINDAN SCRAPING")
     print(f"{'='*70}")
     
-    products = []
-    product_sitemaps = get_product_sitemaps(config)
+    # URL'leri veritabanından çek
+    url_records = get_urls_from_database()
     
-    if not product_sitemaps:
-        print("✗ Sitemap bulunamadı")
-        return products
-    
-    all_product_urls = []
-    for sitemap_url in product_sitemaps:
-        print(f"\n📄 {sitemap_url.split('/')[-1]}")
-        urls = get_sitemap_urls(sitemap_url)
-        if urls:
-            product_urls = filter_product_urls(urls, config)
-            all_product_urls.extend(product_urls)
-            print(f"  ✓ {len(product_urls)} ürün URL'si")
-    
-    all_product_urls = list(set(all_product_urls))
+    if not url_records:
+        print("✗ İşlenecek URL bulunamadı")
+        return []
     
     if TEST_LIMIT > 0:
-        print(f"\n⚠️ TEST: İlk {TEST_LIMIT} ürün")
-        all_product_urls = all_product_urls[:TEST_LIMIT]
+        print(f"\n⚠️ TEST: İlk {TEST_LIMIT} URL")
+        url_records = url_records[:TEST_LIMIT]
     
-    if not all_product_urls:
-        print("✗ Ürün bulunamadı")
-        return products
+    products = []
+    site_stats = {}
     
-    print(f"\n📊 {len(all_product_urls)} ürün scrape edilecek")
+    print(f"\n📊 {len(url_records)} URL scrape edilecek")
     print(f"{'─'*70}")
     
-    for i, url in enumerate(all_product_urls, 1):
-        print(f"  [{i}/{len(all_product_urls)}]", end=" ")
-        product = scrape_product(url, config, db_enabled)
-        if product:
-            products.append(product)
+    for i, record in enumerate(url_records, 1):
+        url = record.get('url')
+        ana_website = record.get('anawebsite', '')
         
+        if not url:
+            continue
+        
+        # Site config'ini belirle
+        config = get_site_config_from_url(url)
+        site_name = config['name']
+        
+        # Site istatistiklerini başlat
+        if site_name not in site_stats:
+            site_stats[site_name] = {'total': 0, 'success': 0, 'failed': 0}
+        
+        print(f"  [{i}/{len(url_records)}] {site_name}", end=" ")
+        
+        product = scrape_product(url, config, db_enabled)
+        
+        if product:
+            product['site'] = site_name
+            product['anawebsite'] = ana_website
+            products.append(product)
+            site_stats[site_name]['success'] += 1
+        else:
+            site_stats[site_name]['failed'] += 1
+        
+        site_stats[site_name]['total'] += 1
+        
+        # Rate limiting
         if i % 10 == 0:
             time.sleep(1)
         else:
@@ -319,11 +292,17 @@ def scrape_site(config, db_enabled=False):
     
     print(f"{'─'*70}")
     print(f"✅ {len(products)} ürün tamamlandı")
+    
+    # Site bazlı özet
+    print(f"\n📊 Site Bazlı Özet:")
+    for site_name, stats in site_stats.items():
+        print(f"  {site_name}: {stats['success']}/{stats['total']} başarılı")
+    
     return products
 
 def main():
     print(f"\n{'='*70}")
-    print("🚀 SCRAPER v3.2")
+    print("🚀 SCRAPER v3.3 - DATABASE URL SOURCE")
     print(f"{'='*70}")
     
     db_enabled = init_supabase()
@@ -333,32 +312,24 @@ def main():
     else:
         print("📝 Sadece JSON")
     
-    all_products = []
-    stats = {}
+    # Veritabanından scrape et
+    all_products = scrape_from_database(db_enabled)
     
-    for domain, config in SITE_CONFIGS.items():
-        products = scrape_site(config, db_enabled)
-        site_name = config['name']
-        stats[site_name] = {
-            'total': len(products),
-            'with_price': len([p for p in products if p['price'] is not None]),
-            'without_price': len([p for p in products if p['price'] is None])
-        }
-        for product in products:
-            product['site'] = site_name
-        all_products.extend(products)
-    
+    # JSON'a kaydet
     with open('products.json', 'w', encoding='utf-8') as f:
         json.dump(all_products, f, ensure_ascii=False, indent=2)
     
+    # Özet istatistikler
     print(f"\n{'='*70}")
-    print("📊 ÖZET")
+    print("📊 GENEL ÖZET")
     print(f"{'='*70}")
     print(f"Toplam: {len(all_products)}")
-    for site_name, site_stats in stats.items():
-        print(f"\n{site_name}: {site_stats['total']}")
-        print(f"  Fiyatlı: {site_stats['with_price']}")
-        print(f"  Fiyatsız: {site_stats['without_price']}")
+    
+    total_with_price = len([p for p in all_products if p.get('price') is not None])
+    total_without_price = len(all_products) - total_with_price
+    
+    print(f"Fiyatlı: {total_with_price}")
+    print(f"Fiyatsız: {total_without_price}")
     
     print(f"\n✅ products.json kaydedildi")
     if db_enabled:
