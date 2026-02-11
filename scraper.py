@@ -108,30 +108,48 @@ def save_product_to_db(product, site_name):
         new_price = product['price']
         
         # Mevcut ürünü kontrol et
-        existing = supabase.table('products').select('price, previous_price').eq('sku', sku).execute()
+        existing = supabase.table('products').select('price, previous_price, price_change').eq('sku', sku).execute()
         
         old_price = None
         previous_price = None
         price_change = None
         price_changed_at = None
+        is_new_product = False
         
         if existing.data and len(existing.data) > 0:
-            # Ürün var, fiyat karşılaştır
+            # Ürün VAR - güncelleme yapılacak
             old_price = existing.data[0].get('price')
             
             if old_price is not None and new_price is not None:
-                if float(old_price) != float(new_price):
-                    # Fiyat değişmiş!
+                # İki fiyat da var, karşılaştır
+                old_price_float = float(old_price)
+                new_price_float = float(new_price)
+                
+                if old_price_float != new_price_float:
+                    # 🎯 FİYAT DEĞİŞTİ!
                     previous_price = old_price
-                    price_change = float(new_price) - float(old_price)
+                    price_change = new_price_float - old_price_float
                     price_changed_at = datetime.now().isoformat()
-                    print(f"      💰 Fiyat değişti: {old_price} → {new_price} ({price_change:+.2f})")
+                    
+                    change_type = "📈 ARTTI" if price_change > 0 else "📉 DÜŞTÜ"
+                    print(f"      💰 {change_type}: {old_price} → {new_price} ({price_change:+.2f})")
                 else:
-                    # Fiyat aynı, önceki değerleri koru
+                    # Fiyat aynı - önceki değerleri koru
                     previous_price = existing.data[0].get('previous_price')
+                    price_change = existing.data[0].get('price_change')
+                    # price_changed_at güncelleme (önceki değeri koru)
+            elif new_price is not None:
+                # Önceden fiyat yoktu, şimdi var
+                print(f"      ℹ️ Fiyat eklendi: {new_price}")
             else:
-                # Yeni fiyat yoksa önceki değerleri koru
+                # Yeni fiyat yok - önceki değerleri koru
                 previous_price = existing.data[0].get('previous_price')
+                price_change = existing.data[0].get('price_change')
+        else:
+            # Ürün YOK - yeni ürün eklenecek
+            is_new_product = True
+            if new_price is not None:
+                print(f"      ✨ Yeni ürün: {new_price}")
         
         # Stock status
         stock_status = 'in_stock' if new_price is not None else 'unknown'
@@ -152,16 +170,30 @@ def save_product_to_db(product, site_name):
                 'site': site_name,
                 'currency': product.get('currency'),
                 'last_seen_price': new_price,
-                'scraped_at': datetime.now().isoformat()
+                'scraped_at': datetime.now().isoformat(),
+                'is_new_product': is_new_product,
+                'price_history': {
+                    'old': str(old_price) if old_price else None,
+                    'new': str(new_price) if new_price else None,
+                    'change': str(price_change) if price_change else None
+                }
             },
             'scraped_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
         }
         
-        supabase.table('products').upsert(data, on_conflict='sku').execute()
-        return True
+        # Veritabanına kaydet/güncelle
+        result = supabase.table('products').upsert(data, on_conflict='sku').execute()
+        
+        # Debug: Kaydın başarılı olduğunu kontrol et
+        if result.data:
+            return True
+        else:
+            print(f"      ⚠️ Upsert sonucu boş döndü")
+            return False
+            
     except Exception as e:
-        print(f"      ❌ DB: {str(e)[:50]}")
+        print(f"      ❌ DB Hatası: {str(e)}")
         return False
 
 def extract_price(soup, selectors):
