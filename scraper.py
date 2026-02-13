@@ -39,9 +39,28 @@ SITE_CONFIGS = {
     'irismostore.com': {
         'name': 'IRISMOSTORE',
         'selectors': {
-            'title': ['h1', '.product-title', 'title'],
-            'price': ['.product-price', 'h3', 'span.price'],
-            'currency': 'TL'
+            'title': [
+                'h1.productDetail-title',
+                'h1.product-name',
+                '.product-detail-name',
+                'h1[itemprop="name"]',
+                'h1',
+                '.product-title',
+                'title'
+            ],
+            'price': [
+                'span.productDetail-price',
+                'div.productDetail-price span',
+                '.product-price-value',
+                'span.price-value',
+                'div.price span',
+                'span[class*="price"]',
+                '.product-price',
+                'h3',
+                'span.price',
+                'meta[property="product:price:amount"]'
+            ],
+            'currency': 'USD'  # USD olarak değiştirildi
         }
     },
     'sharafstore.com': {
@@ -273,13 +292,32 @@ def extract_price(soup, selectors):
         try:
             element = soup.select_one(selector)
             if element:
+                price_text = None
+                
+                # 1. Meta tag ise content attribute'undan al
                 if element.name == 'meta':
                     price_text = element.get('content', '')
-                else:
+                
+                # 2. Data attribute'lerden dene (data-price, data-value vs)
+                elif not price_text:
+                    for attr in ['data-price', 'data-value', 'data-product-price', 'content']:
+                        if element.get(attr):
+                            price_text = element.get(attr)
+                            break
+                
+                # 3. Text içeriğinden al
+                if not price_text:
                     price_text = element.get_text(strip=True)
                 
-                # Fiyat parse - virgül ve boşlukları temizle
-                price_text = price_text.replace(',', '').replace(' ', '')
+                if not price_text:
+                    continue
+                
+                # Fiyat parse
+                # Virgül ve boşlukları temizle
+                price_text = price_text.replace(',', '').replace(' ', '').replace('\n', '').replace('\t', '')
+                
+                # Para birimi sembollerini kaldır (TL, USD, $, € vb)
+                price_text = price_text.replace('TL', '').replace('USD', '').replace('$', '').replace('€', '')
                 
                 # Sadece rakam ve nokta bırak
                 price_text = re.sub(r'[^\d.]', '', price_text)
@@ -320,6 +358,24 @@ def scrape_product(url, config, db_enabled=False):
         price = extract_price(soup, config['selectors']['price'])
         currency = config['selectors']['currency']
         
+        # DEBUG: Fiyat bulunamazsa HTML'den ipucu bul
+        if price is None and 'irismostore' in url.lower():
+            # Fiyat olabilecek tüm elementleri bul
+            potential_prices = []
+            
+            # Tüm span, div, meta'ları tara
+            for elem in soup.find_all(['span', 'div', 'meta', 'p']):
+                text = elem.get_text(strip=True) if elem.name != 'meta' else elem.get('content', '')
+                # $ veya rakam içeren elementleri bul
+                if text and ('$' in text or any(char.isdigit() for char in text)):
+                    if len(text) < 50:  # Çok uzun textleri alma
+                        potential_prices.append(f"{elem.name}.{elem.get('class', [''])[0] if elem.get('class') else ''}: {text[:30]}")
+            
+            if potential_prices:
+                print(f"\n      🔍 Fiyat bulunamadı, potansiyel elementler:")
+                for p in potential_prices[:5]:  # İlk 5'ini göster
+                    print(f"         {p}")
+        
         product_data = {'title': title, 'price': price, 'currency': currency, 'url': url}
         
         if db_enabled:
@@ -336,7 +392,7 @@ def scrape_product(url, config, db_enabled=False):
         
         # Fiyat yoksa URL'yi de göster (debug için)
         if price is None:
-            print(f"       └─ URL: {url[:60]}...")
+            print(f"       └─ URL: {url[:70]}...")
         
         return product_data
     except requests.exceptions.Timeout:
