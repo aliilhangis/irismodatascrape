@@ -43,6 +43,20 @@ SITE_CONFIGS = {
             'price': ['.product-price', 'h3', 'span.price'],
             'currency': 'TL'
         }
+    },
+    'sharafstore.com': {
+        'name': 'SHARAFSTORE',
+        'selectors': {
+            'title': ['h1.product-title', 'h1[itemprop="name"]', '.product-name', 'h1', 'title'],
+            'price': [
+                'span.price',
+                '.product-price span',
+                'span[class*="price"]',
+                'div.price',
+                '.price-wrapper span'
+            ],
+            'currency': 'TL'
+        }
     }
 }
 
@@ -66,19 +80,52 @@ def init_supabase():
         return False
 
 def get_urls_from_database():
-    """productofsitemapcrawl tablosundan URL'leri çeker"""
+    """productofsitemapcrawl tablosundan URL'leri çeker (processed olmayanlar)"""
     try:
         print("\n📥 Veritabanından URL'ler çekiliyor...")
-        response = supabase.table('productofsitemapcrawl').select('id, url, anawebsite').execute()
+        
+        # Önce processed=false olanları kontrol et
+        response = supabase.table('productofsitemapcrawl')\
+            .select('id, url, anawebsite, processed')\
+            .or_('processed.is.null,processed.eq.false')\
+            .execute()
+        
+        # Eğer processed kolonu yoksa, tüm URL'leri çek
+        if not response.data:
+            print("  ℹ️ Processed flag yok veya tüm URL'ler işlenmiş, tüm kayıtlar çekiliyor...")
+            response = supabase.table('productofsitemapcrawl')\
+                .select('id, url, anawebsite')\
+                .execute()
         
         if response.data:
+            processed_count = len([r for r in response.data if r.get('processed') == True])
+            unprocessed_count = len(response.data) - processed_count
+            
             print(f"  ✅ {len(response.data)} URL bulundu")
+            print(f"     └─ İşlenmemiş: {unprocessed_count}")
+            if processed_count > 0:
+                print(f"     └─ İşlenmiş: {processed_count} (atlandı)")
+            
             return response.data
         else:
             print("  ⚠️ Veritabanında URL bulunamadı")
             return []
     except Exception as e:
         print(f"  ❌ Hata: {e}")
+        print(f"     └─ Tüm URL'ler çekiliyor (fallback)...")
+        
+        # Hata durumunda tüm URL'leri çek
+        try:
+            response = supabase.table('productofsitemapcrawl')\
+                .select('id, url, anawebsite')\
+                .execute()
+            
+            if response.data:
+                print(f"  ✅ {len(response.data)} URL bulundu (fallback)")
+                return response.data
+        except:
+            pass
+        
         return []
 
 def get_site_config_from_url(url):
@@ -187,13 +234,41 @@ def save_product_to_db(product, site_name):
         
         # Debug: Kaydın başarılı olduğunu kontrol et
         if result.data:
+            # Sessiz başarı (sadece fiyat değişirse mesaj göster)
             return True
         else:
-            print(f"      ⚠️ Upsert sonucu boş döndü")
+            print(f"      ⚠️ Upsert sonucu boş döndü (SKU: {sku})")
             return False
             
     except Exception as e:
         print(f"      ❌ DB Hatası: {str(e)}")
+        return False
+
+def mark_url_as_processed(url_id, success=True):
+    """URL'yi processed olarak işaretler"""
+    try:
+        data = {
+            'processed': True,
+            'processed_at': datetime.now().isoformat()
+        }
+        
+        if success:
+            data['last_scrape_status'] = 'success'
+        else:
+            data['last_scrape_status'] = 'failed'
+        
+        supabase.table('productofsitemapcrawl')\
+            .update(data)\
+            .eq('id', url_id)\
+            .execute()
+        
+        return True
+    except Exception as e:
+        # Processed kolonu yoksa sessizce devam et
+        if 'column' in str(e).lower() and 'processed' in str(e).lower():
+            return True  # Kolon yok, sorun değil
+        
+        print(f"      ⚠️ İşaretleme hatası: {str(e)[:50]}")
         return False
 
 def extract_price(soup, selectors):
@@ -256,12 +331,26 @@ def scrape_product(url, config, db_enabled=False):
         else:
             db_icon = "📝"
         
-        price_str = f"{price} {currency}" if price else "Fiyat yok"
-        print(f"    {db_icon} {title[:45]}... - {price_str}")
+        # Daha detaylı log
+        price_str = f"{price} {currency}" if price else "❌ Fiyat yok"
+        title_short = title[:40] + "..." if len(title) > 40 else title
+        
+        print(f"    {db_icon} {title_short} - {price_str}")
+        
+        # Fiyat yoksa URL'yi de göster (debug için)
+        if price is None:
+            print(f"       └─ URL: {url[:60]}...")
         
         return product_data
+    except requests.exceptions.Timeout:
+        print(f"    ⏱️ Timeout: {url[:50]}...")
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"    ✗ Network Error: {str(e)[:40]}")
+        return None
     except Exception as e:
-        print(f"    ✗ Error: {str(e)[:50]}")
+        print(f"    ✗ Parse Error: {str(e)[:40]}")
+        print(f"       └─ URL: {url[:60]}...")
         return None
 
 def scrape_from_database(db_enabled=False):
@@ -277,17 +366,27 @@ def scrape_from_database(db_enabled=False):
         print("✗ İşlenecek URL bulunamadı")
         return []
     
+    # Processed olanları filtrele
+    unprocessed_records = [r for r in url_records if not r.get('processed')]
+    
+    if not unprocessed_records:
+        print("⚠️ Tüm URL'ler zaten işlenmiş!")
+        print("💡 İpucu: Yeniden scrape etmek için SQL çalıştırın:")
+        print("   UPDATE productofsitemapcrawl SET processed = false;")
+        return []
+    
     if TEST_LIMIT > 0:
         print(f"\n⚠️ TEST: İlk {TEST_LIMIT} URL")
-        url_records = url_records[:TEST_LIMIT]
+        unprocessed_records = unprocessed_records[:TEST_LIMIT]
     
     products = []
     site_stats = {}
     
-    print(f"\n📊 {len(url_records)} URL scrape edilecek")
+    print(f"\n📊 {len(unprocessed_records)} URL scrape edilecek")
     print(f"{'─'*70}")
     
-    for i, record in enumerate(url_records, 1):
+    for i, record in enumerate(unprocessed_records, 1):
+        url_id = record.get('id')
         url = record.get('url')
         ana_website = record.get('anawebsite', '')
         
@@ -302,7 +401,7 @@ def scrape_from_database(db_enabled=False):
         if site_name not in site_stats:
             site_stats[site_name] = {'total': 0, 'success': 0, 'failed': 0}
         
-        print(f"  [{i}/{len(url_records)}] {site_name}", end=" ")
+        print(f"  [{i}/{len(unprocessed_records)}] {site_name}", end=" ")
         
         product = scrape_product(url, config, db_enabled)
         
@@ -311,8 +410,16 @@ def scrape_from_database(db_enabled=False):
             product['anawebsite'] = ana_website
             products.append(product)
             site_stats[site_name]['success'] += 1
+            
+            # Başarılı - processed olarak işaretle
+            if url_id:
+                mark_url_as_processed(url_id, success=True)
         else:
             site_stats[site_name]['failed'] += 1
+            
+            # Başarısız - yine de işaretle (tekrar denemesin)
+            if url_id:
+                mark_url_as_processed(url_id, success=False)
         
         site_stats[site_name]['total'] += 1
         
@@ -328,7 +435,10 @@ def scrape_from_database(db_enabled=False):
     # Site bazlı özet
     print(f"\n📊 Site Bazlı Özet:")
     for site_name, stats in site_stats.items():
-        print(f"  {site_name}: {stats['success']}/{stats['total']} başarılı")
+        success_rate = (stats['success'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        print(f"  {site_name}: {stats['success']}/{stats['total']} başarılı ({success_rate:.1f}%)")
+        if stats['failed'] > 0:
+            print(f"     └─ Başarısız: {stats['failed']}")
     
     return products
 
