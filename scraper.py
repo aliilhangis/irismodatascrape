@@ -252,10 +252,7 @@ def mark_url_as_processed(url_id, success=True):
             'processed_at': datetime.now().isoformat()
         }
         
-        if success:
-            data['last_scrape_status'] = 'success'
-        else:
-            data['last_scrape_status'] = 'failed'
+        # last_scrape_status kolonunu kaldırdık (tabloda yok)
         
         supabase.table('productofsitemapcrawl')\
             .update(data)\
