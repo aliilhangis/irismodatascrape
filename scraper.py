@@ -288,6 +288,73 @@ def mark_url_as_processed(url_id, success=True):
         return False
 
 def extract_price(soup, selectors):
+    # Önce JSON-LD schema.org'dan fiyat almayı dene
+    try:
+        for script in soup.find_all('script', type='application/ld+json'):
+            if script.string:
+                import json
+                try:
+                    data = json.loads(script.string)
+                    # Tek obje veya liste olabilir
+                    if isinstance(data, list):
+                        data = data[0] if data else {}
+                    
+                    # Fiyat alanlarını ara
+                    if 'offers' in data:
+                        offers = data['offers']
+                        if isinstance(offers, dict):
+                            price_val = offers.get('price') or offers.get('lowPrice') or offers.get('highPrice')
+                            if price_val:
+                                try:
+                                    price = float(str(price_val).replace(',', ''))
+                                    if price > 0:
+                                        return price
+                                except:
+                                    pass
+                    
+                    # Direkt price alanı
+                    if 'price' in data:
+                        try:
+                            price = float(str(data['price']).replace(',', ''))
+                            if price > 0:
+                                return price
+                        except:
+                            pass
+                except:
+                    pass
+    except:
+        pass
+    
+    # Hidden input'larda fiyat ara
+    try:
+        for inp in soup.find_all('input', type='hidden'):
+            name = inp.get('name', '').lower()
+            value = inp.get('value', '')
+            if any(keyword in name for keyword in ['price', 'fiyat', 'amount']) and value:
+                try:
+                    price = float(str(value).replace(',', ''))
+                    if price > 0:
+                        return price
+                except:
+                    pass
+    except:
+        pass
+    
+    # data-* attribute'larda fiyat ara (tüm elementlerde)
+    try:
+        for elem in soup.find_all(attrs={'data-price': True}):
+            value = elem.get('data-price')
+            if value:
+                try:
+                    price = float(str(value).replace(',', ''))
+                    if price > 0:
+                        return price
+                except:
+                    pass
+    except:
+        pass
+    
+    # Normal selector'larla devam et
     for selector in selectors:
         try:
             # Özel durum: h3 ise tüm h3'leri kontrol et
@@ -380,26 +447,51 @@ def scrape_product(url, config, db_enabled=False):
             # Fiyat olabilecek tüm elementleri bul
             potential_prices = []
             
-            # Özellikle h3 tag'lerini göster
-            print(f"\n      🔍 Fiyat bulunamadı, H3 tag'leri:")
-            for h3 in soup.find_all('h3')[:10]:
-                text = h3.get_text(strip=True)
-                if text:
-                    print(f"         H3: {text}")
+            # 1. Script tag'lerinde fiyat ara (JavaScript/JSON)
+            print(f"\n      🔍 Fiyat bulunamadı, Script içinde arıyorum...")
+            for script in soup.find_all('script'):
+                script_text = script.string if script.string else ""
+                # price, fiyat, amount gibi kelimeler ve rakamlar ara
+                if any(keyword in script_text.lower() for keyword in ['price', 'fiyat', 'amount', 'usd']):
+                    # Fiyat pattern'i ara: "price": 149, "amount": "149.00"
+                    price_matches = re.findall(r'["\']?(?:price|fiyat|amount)["\']?\s*[:=]\s*["\']?(\d+\.?\d*)["\']?', script_text, re.IGNORECASE)
+                    if price_matches:
+                        print(f"         💰 Script'te fiyat bulundu: {price_matches}")
+                        # İlk bulduğunu dene
+                        try:
+                            found_price = float(price_matches[0])
+                            if found_price > 0:
+                                print(f"         ✅ Kullanılıyor: {found_price}")
+                                price = found_price
+                                break
+                        except:
+                            pass
             
-            # Tüm span, div, meta'ları tara
-            print(f"      💡 Diğer potansiyel elementler:")
-            for elem in soup.find_all(['span', 'div', 'meta', 'p']):
-                text = elem.get_text(strip=True) if elem.name != 'meta' else elem.get('content', '')
-                # $ veya rakam içeren elementleri bul
-                if text and ('$' in text or 'USD' in text or (any(char.isdigit() for char in text) and len(text) < 20)):
-                    if len(text) < 50:  # Çok uzun textleri alma
-                        classes = ' '.join(elem.get('class', []))
-                        potential_prices.append(f"{elem.name}.{classes}: {text}")
-            
-            if potential_prices:
-                for p in potential_prices[:8]:  # İlk 8'ini göster
-                    print(f"         {p}")
+            if price is None:
+                # 2. H3 tag'lerini göster
+                print(f"      📝 H3 tag'leri:")
+                for h3 in soup.find_all('h3')[:10]:
+                    text = h3.get_text(strip=True)
+                    if text:
+                        print(f"         H3: {text}")
+                
+                # 3. Tüm span, div, meta'ları tara
+                print(f"      💡 Diğer potansiyel elementler:")
+                for elem in soup.find_all(['span', 'div', 'meta', 'p']):
+                    text = elem.get_text(strip=True) if elem.name != 'meta' else elem.get('content', '')
+                    # $ veya rakam içeren elementleri bul
+                    if text and ('$' in text or 'USD' in text or (any(char.isdigit() for char in text) and len(text) < 20)):
+                        if len(text) < 50:  # Çok uzun textleri alma
+                            classes = ' '.join(elem.get('class', []))
+                            potential_prices.append(f"{elem.name}.{classes}: {text}")
+                
+                if potential_prices:
+                    for p in potential_prices[:8]:  # İlk 8'ini göster
+                        print(f"         {p}")
+        
+        # Eğer script'ten fiyat bulduysa product_data'yı güncelle
+        if price is not None and product_data['price'] is None:
+            product_data['price'] = price
         
         product_data = {'title': title, 'price': price, 'currency': currency, 'url': url}
         
