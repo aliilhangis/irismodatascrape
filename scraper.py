@@ -49,18 +49,18 @@ SITE_CONFIGS = {
                 'title'
             ],
             'price': [
+                'h3',  # En önce h3 - önceden bu çalışıyordu
+                '.product-price',
+                'span.price',
                 'span.productDetail-price',
                 'div.productDetail-price span',
                 '.product-price-value',
                 'span.price-value',
                 'div.price span',
                 'span[class*="price"]',
-                '.product-price',
-                'h3',
-                'span.price',
                 'meta[property="product:price:amount"]'
             ],
-            'currency': 'USD'  # USD olarak değiştirildi
+            'currency': 'USD'
         }
     },
     'sharafstore.com': {
@@ -290,6 +290,23 @@ def mark_url_as_processed(url_id, success=True):
 def extract_price(soup, selectors):
     for selector in selectors:
         try:
+            # Özel durum: h3 ise tüm h3'leri kontrol et
+            if selector == 'h3':
+                for h3 in soup.find_all('h3'):
+                    text = h3.get_text(strip=True)
+                    # Fiyat pattern'i ara: $129, 129 USD, 129.99 gibi
+                    price_match = re.search(r'[\$]?\s*(\d+[.,]?\d*)\s*(USD|TL|\$)?', text)
+                    if price_match:
+                        price_text = price_match.group(1)
+                        price_text = price_text.replace(',', '')
+                        try:
+                            price = float(price_text)
+                            if price > 0:
+                                return price
+                        except:
+                            continue
+                continue
+            
             element = soup.select_one(selector)
             if element:
                 price_text = None
@@ -363,17 +380,25 @@ def scrape_product(url, config, db_enabled=False):
             # Fiyat olabilecek tüm elementleri bul
             potential_prices = []
             
+            # Özellikle h3 tag'lerini göster
+            print(f"\n      🔍 Fiyat bulunamadı, H3 tag'leri:")
+            for h3 in soup.find_all('h3')[:10]:
+                text = h3.get_text(strip=True)
+                if text:
+                    print(f"         H3: {text}")
+            
             # Tüm span, div, meta'ları tara
+            print(f"      💡 Diğer potansiyel elementler:")
             for elem in soup.find_all(['span', 'div', 'meta', 'p']):
                 text = elem.get_text(strip=True) if elem.name != 'meta' else elem.get('content', '')
                 # $ veya rakam içeren elementleri bul
-                if text and ('$' in text or any(char.isdigit() for char in text)):
+                if text and ('$' in text or 'USD' in text or (any(char.isdigit() for char in text) and len(text) < 20)):
                     if len(text) < 50:  # Çok uzun textleri alma
-                        potential_prices.append(f"{elem.name}.{elem.get('class', [''])[0] if elem.get('class') else ''}: {text[:30]}")
+                        classes = ' '.join(elem.get('class', []))
+                        potential_prices.append(f"{elem.name}.{classes}: {text}")
             
             if potential_prices:
-                print(f"\n      🔍 Fiyat bulunamadı, potansiyel elementler:")
-                for p in potential_prices[:5]:  # İlk 5'ini göster
+                for p in potential_prices[:8]:  # İlk 8'ini göster
                     print(f"         {p}")
         
         product_data = {'title': title, 'price': price, 'currency': currency, 'url': url}
