@@ -55,19 +55,27 @@ def get_all_urls():
     print("\n📥 Tüm URL'ler çekiliyor...")
     
     try:
-        # HİÇBİR FİLTRE YOK - HEPSİNİ ÇEK!
+        # SUPABASE LİMİTİ! Default 1000 - biz hepsini istiyoruz!
+        # Önce toplam sayıyı öğren
+        count_response = supabase.table('productofsitemapcrawl').select('*', count='exact').execute()
+        total_count = count_response.count if hasattr(count_response, 'count') else 0
+        
+        print(f"  📊 Toplam kayıt sayısı: {total_count}")
+        
+        # Şimdi hepsini çek - limit koy!
         response = supabase.table('productofsitemapcrawl')\
             .select('id, url, anawebsite')\
+            .limit(10000)\
             .execute()
         
         if response.data:
-            print(f"  ✅ {len(response.data)} URL bulundu (HEPSİ)")
+            print(f"  ✅ {len(response.data)} URL çekildi")
             
             # Site bazında göster
             from collections import Counter
             sites = Counter([r.get('anawebsite', 'unknown') for r in response.data])
             print(f"  📊 Site dağılımı:")
-            for site, count in sites.items():
+            for site, count in sorted(sites.items(), key=lambda x: x[1], reverse=True):
                 print(f"     └─ {site}: {count} URL")
             
             return response.data
@@ -79,16 +87,20 @@ def get_all_urls():
         return []
 
 def get_site_config(url):
-    """URL'den site config'ini bul"""
-    domain = urlparse(url).netloc.replace('www.', '')
+    """URL'den site config'ini bul - www'lu www'suz fark etmez"""
+    domain = urlparse(url).netloc.lower()
+    # www. varsa da yoksa da eşleşsin
+    domain_clean = domain.replace('www.', '')
     
     for config_domain, config in SITE_CONFIGS.items():
-        if config_domain in domain:
+        config_clean = config_domain.replace('www.', '')
+        # Hem www'lu hem www'suz kontrol et
+        if config_clean in domain or config_domain in domain:
             return config
     
     # Default
     return {
-        'name': domain.upper(),
+        'name': domain.upper().replace('WWW.', ''),
         'price_selectors': ['.price', 'span.price'],
         'title_selectors': ['h1', 'title'],
         'currency': 'TL'
