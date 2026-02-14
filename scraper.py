@@ -51,16 +51,25 @@ SITE_CONFIGS = {
 }
 
 def get_all_urls():
-    """productofsitemapcrawl tablosundan TÜM URL'leri çek"""
+    """productofsitemapcrawl tablosundan TÜM URL'leri çek - HER ZAMAN HEPSI"""
     print("\n📥 Tüm URL'ler çekiliyor...")
     
     try:
+        # HİÇBİR FİLTRE YOK - HEPSİNİ ÇEK!
         response = supabase.table('productofsitemapcrawl')\
             .select('id, url, anawebsite')\
             .execute()
         
         if response.data:
-            print(f"  ✅ {len(response.data)} URL bulundu")
+            print(f"  ✅ {len(response.data)} URL bulundu (HEPSİ)")
+            
+            # Site bazında göster
+            from collections import Counter
+            sites = Counter([r.get('anawebsite', 'unknown') for r in response.data])
+            print(f"  📊 Site dağılımı:")
+            for site, count in sites.items():
+                print(f"     └─ {site}: {count} URL")
+            
             return response.data
         else:
             print("  ⚠️ Hiç URL yok!")
