@@ -51,39 +51,53 @@ SITE_CONFIGS = {
 }
 
 def get_all_urls():
-    """productofsitemapcrawl tablosundan TÜM URL'leri çek - HER ZAMAN HEPSI"""
-    print("\n📥 Tüm URL'ler çekiliyor...")
+    """productofsitemapcrawl tablosundan TÜM URL'leri çek - PAGINATION ile"""
+    print("\n📥 Tüm URL'ler çekiliyor (pagination)...")
     
     try:
-        # SUPABASE LİMİTİ! Default 1000 - biz hepsini istiyoruz!
-        # Önce toplam sayıyı öğren
-        count_response = supabase.table('productofsitemapcrawl').select('*', count='exact').execute()
-        total_count = count_response.count if hasattr(count_response, 'count') else 0
+        all_urls = []
+        page_size = 1000
+        offset = 0
         
-        print(f"  📊 Toplam kayıt sayısı: {total_count}")
+        while True:
+            print(f"  📄 Sayfa {offset//page_size + 1} çekiliyor...")
+            
+            response = supabase.table('productofsitemapcrawl')\
+                .select('id, url, anawebsite')\
+                .range(offset, offset + page_size - 1)\
+                .execute()
+            
+            if not response.data or len(response.data) == 0:
+                break
+            
+            all_urls.extend(response.data)
+            print(f"     └─ {len(response.data)} kayıt eklendi (Toplam: {len(all_urls)})")
+            
+            # Eğer page_size'dan az gelirse, bitti demektir
+            if len(response.data) < page_size:
+                break
+            
+            offset += page_size
         
-        # Şimdi hepsini çek - limit koy!
-        response = supabase.table('productofsitemapcrawl')\
-            .select('id, url, anawebsite')\
-            .limit(10000)\
-            .execute()
-        
-        if response.data:
-            print(f"  ✅ {len(response.data)} URL çekildi")
+        if all_urls:
+            print(f"\n  ✅ TOPLAM {len(all_urls)} URL çekildi")
             
             # Site bazında göster
             from collections import Counter
-            sites = Counter([r.get('anawebsite', 'unknown') for r in response.data])
+            sites = Counter([r.get('anawebsite', 'unknown') for r in all_urls])
             print(f"  📊 Site dağılımı:")
             for site, count in sorted(sites.items(), key=lambda x: x[1], reverse=True):
                 print(f"     └─ {site}: {count} URL")
             
-            return response.data
+            return all_urls
         else:
             print("  ⚠️ Hiç URL yok!")
             return []
+            
     except Exception as e:
         print(f"  ❌ Hata: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 def get_site_config(url):
